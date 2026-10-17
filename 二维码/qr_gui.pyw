@@ -44,8 +44,109 @@ class QRApp:
         self.qr_image = None      # 生成的二维码 PIL 图片
         self.last_link = ""       # 最近解码出的内容
 
+        # 剪贴板自动检测（窗口切换时触发）
+        self._last_clip = None    # 上次自动处理的剪贴板内容（防重复）
+        self._last_auto_t = 0.0   # 上次自动处理时间（防抖）
+
         self._build_ui()
         self.set_status("就绪")
+        # 延迟绑定窗口焦点事件，避免启动初始化阶段误触发
+        self.root.after(300, self._bind_auto_clipboard)
+
+    # ---------------- 自动检测剪贴板 ----------------
+    def _do_gen_qr(self, link: str, verbose: bool):
+        """生成二维码。verbose=True 时出错弹窗，False 时静默（自动检测用）。"""
+        try:
+            qr = qrcode.QRCode(
+                error_correction=qrcode.constants.ERROR_CORRECT_H,
+                box_size=10, border=4)
+            qr.add_data(link)
+            qr.make(fit=True)
+            self.qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+        except Exception as e:
+            if verbose:
+                messagebox.showerror("生成失败", str(e))
+            return
+
+        preview = self._scale(self.qr_image)
+        self.qr_photo = ImageTk.PhotoImage(preview)
+        self.qr_label.configure(image=self.qr_photo, text="")
+        self.set_status(f"二维码已生成（{link}）")
+
+    def _auto_decode(self, img: Image.Image, verbose: bool):
+        """静默解码（不弹框）"""
+        if zbar_decode is None:
+            if verbose:
+                messagebox.showerror("错误", "缺少 pyzbar 库，请运行：pip install pyzbar")
+            return
+        self._show_preview(img)
+        results = zbar_decode(img)
+        if not results:
+            big = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
+            results = zbar_decode(big)
+        if not results:
+            self.result_var.set("")
+            self.last_link = ""
+            self.set_status("识别失败")
+            return
+        text = self._smart_decode(results[0].data)
+        self.last_link = text
+        self.result_var.set(text)
+        if text.lower().startswith(("http://", "https://")):
+            self.set_status("解码成功：" + text + "（点击“浏览器打开链接”可打开）")
+        else:
+            self.set_status("解码成功：" + text)
+
+    def _auto_handle_clipboard(self, event=None):
+        # 防抖
+        if time.time() - self._last_auto_t < 1.0:
+            return
+        self._last_auto_t = time.time()
+
+        # 1) 优先检测图片
+        if ImageGrab is not None:
+            try:
+                clip_img = ImageGrab.grabclipboard()
+            except Exception:
+                clip_img = None
+            if clip_img is not None:
+                if isinstance(clip_img, list):
+                    try:
+                        self._auto_decode(clip_img[0], verbose=False)
+                    except Exception:
+                        pass
+                else:
+                    self._auto_decode(clip_img, verbose=False)
+                return
+        # 2) 检测文本链接
+        try:
+            txt = self.root.clipboard_get().strip()
+        except tk.TclError:
+            return
+        if not txt:
+            return
+        if not txt.lower().startswith(("http://", "https://")):
+            return
+        if txt != self._last_clip:
+            self._last_clip = txt
+            self._last_auto_t = time.time()
+            self._do_gen_qr(txt, verbose=False)
+
+    def _bind_auto_clipboard(self):
+        self.root.bind("<FocusIn>", self._auto_handle_clipboard)
+
+    def bind_auto_clipboard(self):
+        self.root.bind("<FocusIn>", self._auto_handle_clipboard)
+
+    # ---------------- 链接 -> 二维码（静默版） ----------------
+    def gen_qr(self):
+        link = self.link_var.get().strip()
+        if not link:
+            messagebox.showwarning("提示", "请先输入链接")
+            return
+        if not link.lower().startswith(("http://", "https://")):
+            link = "https://" + link
+        self._do_gen_qr(link, verbose=True)
 
     # ---------------- 界面（全部内容在同一页面） ----------------
     def _build_ui(self):
