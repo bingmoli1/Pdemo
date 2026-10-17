@@ -65,9 +65,14 @@ class QRApp:
         entry.bind("<Return>", lambda e: self.gen_qr())
         ttk.Button(row1, text="生成", width=7, command=self.gen_qr).pack(side="left")
 
-        self.qr_label = ttk.Label(gbox, text="生成的二维码将显示在这里",
-                                  anchor="center", width=34)
-        self.qr_label.pack(pady=8)
+        # 固定大小的显示块
+        self.qr_frame = tk.Frame(gbox, width=PREVIEW_SIZE, height=PREVIEW_SIZE,
+                                 bg="white", relief="groove", bd=1)
+        self.qr_frame.pack(pady=8)
+        self.qr_frame.pack_propagate(False)  # 锁定尺寸，不随内容变化
+        self.qr_label = ttk.Label(self.qr_frame, text="生成的二维码将显示在这里",
+                                  anchor="center")
+        self.qr_label.pack(fill="both", expand=True)
 
         row2 = ttk.Frame(gbox)
         row2.pack(pady=(0, 10))
@@ -83,17 +88,23 @@ class QRApp:
         if ImageGrab is not None:
             ttk.Button(row3, text="粘贴截图", command=self.paste_image).pack(side="left", padx=6)
         self.src_name_var = tk.StringVar(value="未选择")
-        ttk.Label(row3, textvariable=self.src_name_var, foreground="#666").pack(
-            side="left", fill="x", expand=True)
+        # width 固定，防止长文件名撑大页面
+        ttk.Label(row3, textvariable=self.src_name_var, foreground="#666",
+                  width=18, anchor="w").pack(side="left", padx=(6, 0))
 
-        self.src_label = ttk.Label(dbox, text="原图预览", anchor="center", width=34)
-        self.src_label.pack(pady=(8, 6))
+        self.src_frame = tk.Frame(dbox, width=PREVIEW_SIZE, height=PREVIEW_SIZE,
+                                  bg="white", relief="groove", bd=1)
+        self.src_frame.pack(pady=(8, 6))
+        self.src_frame.pack_propagate(False)  # 锁定尺寸，不随内容变化
+        self.src_label = ttk.Label(self.src_frame, text="原图预览", anchor="center")
+        self.src_label.pack(fill="both", expand=True)
 
         row4 = ttk.Frame(dbox)
         row4.pack(fill="x", padx=8)
         self.result_var = tk.StringVar()
-        ttk.Entry(row4, textvariable=self.result_var, state="readonly").pack(
-            side="left", fill="x", expand=True)
+        # width 固定，长链接横向滚动，不撑大页面
+        ttk.Entry(row4, textvariable=self.result_var, state="readonly",
+                  width=32).pack(side="left", fill="x", expand=True)
 
         row5 = ttk.Frame(dbox)
         row5.pack(pady=(6, 10))
@@ -102,8 +113,10 @@ class QRApp:
 
         # ========== 状态栏 ==========
         self.status_var = tk.StringVar()
+        # width 固定，超长状态文字自动省略，不撑大窗口
         ttk.Label(self.root, textvariable=self.status_var, anchor="w",
-                  relief="sunken", foreground="#333").pack(fill="x", side="bottom")
+                  relief="sunken", foreground="#333",
+                  width=70).pack(fill="x", side="bottom")
 
     def set_status(self, text: str):
         self.status_var.set("  " + text)
