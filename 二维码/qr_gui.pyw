@@ -44,13 +44,8 @@ class QRApp:
         self.qr_image = None      # 生成的二维码 PIL 图片
         self.last_link = ""       # 最近解码出的内容
 
-        self._last_clip = None    # 上次自动处理的剪贴板内容（防重复）
-        self._last_auto_t = 0.0   # 上次自动处理时间（防抖）
-
         self._build_ui()
         self.set_status("就绪")
-        # 延迟绑定窗口焦点事件，避免启动初始化阶段误触发
-        self.root.after(300, self._bind_auto_clipboard)
 
     # ---------------- 界面（全部内容在同一页面） ----------------
     def _build_ui(self):
