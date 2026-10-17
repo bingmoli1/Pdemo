@@ -179,6 +179,7 @@ class QRApp:
         row2 = ttk.Frame(gbox)
         row2.pack(pady=(0, 10))
         ttk.Button(row2, text="保存为图片", command=self.save_qr).pack(side="left", padx=5)
+        ttk.Button(row2, text="复制二维码", command=self._copy_qr).pack(side="left", padx=5)
 
         # ========== 右列：二维码 -> 链接 ==========
         dbox = ttk.LabelFrame(body, text=" 二维码 → 链接 ")
@@ -368,6 +369,61 @@ class QRApp:
             return
         webbrowser.open(self.last_link)
         self.set_status("已用默认浏览器打开：" + self.last_link)
+
+    def _copy_qr(self):
+        """将生成的二维码图片直接复制到剪贴板（可直接 Ctrl+V 粘贴）"""
+        try:
+            if not self.qr_image:
+                messagebox.showwarning("提示", "请先生成二维码")
+                return
+            self._copy_image_to_clipboard(self.qr_image)
+            self.set_status("二维码图片已复制到剪贴板，可直接 Ctrl+V 粘贴使用")
+        except Exception as e:
+            messagebox.showerror("复制失败", str(e))
+
+    @staticmethod
+    def _copy_image_to_clipboard(img: "Image.Image"):
+        """将 PIL Image 复制到 Windows 剪贴板（CF_DIB 位图格式）"""
+        import io
+        import ctypes
+
+        # 转为 BMP 字节，去掉 14 字节文件头 = DIB 数据（含 BITMAPINFOHEADER + 像素）
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="BMP")
+        dib = buf.getvalue()[14:]
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        # 64 位系统必须设置返回类型/参数类型为指针，否则 32 位截断导致崩溃
+        kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        user32.SetClipboardData.restype = ctypes.c_void_p
+        CF_DIB = 8
+        GMEM_MOVEABLE = 0x0002
+
+        if not user32.OpenClipboard(0):
+            raise RuntimeError("无法打开剪贴板")
+        try:
+            user32.EmptyClipboard()
+            hGlobal = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dib))
+            if not hGlobal:
+                raise RuntimeError("内存分配失败")
+            pGlobal = kernel32.GlobalLock(hGlobal)
+            if not pGlobal:
+                kernel32.GlobalFree(hGlobal)
+                raise RuntimeError("锁定内存失败")
+            ctypes.memmove(pGlobal, dib, len(dib))
+            kernel32.GlobalUnlock(hGlobal)
+            if not user32.SetClipboardData(CF_DIB, hGlobal):
+                kernel32.GlobalFree(hGlobal)
+                raise RuntimeError("写入剪贴板失败")
+        finally:
+            user32.CloseClipboard()
 
     def copy_link(self):
         if not self.last_link:
