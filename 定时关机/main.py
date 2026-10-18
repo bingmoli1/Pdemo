@@ -1,25 +1,134 @@
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 import subprocess
 import datetime
 import json
 import os
+import sys
+import winreg
 
 
 class ShutdownTimerApp:
 
-    # 保存任务的文件
-    SAVE_FILE = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "shutdown_task.json"
-    )
+    # =========================
+    # 界面配色 / 常量（仅影响外观）
+    # =========================
+    BG = "#F4F6FA"            # 窗口背景
+    CARD = "#FFFFFF"          # 卡片背景
+    BORDER = "#E2E8F0"        # 卡片描边
+    TEXT = "#1E293B"          # 主文字
+    SUBTEXT = "#94A3B8"       # 次要文字
+    PRIMARY = "#3B82F6"       # 主按钮蓝
+    PRIMARY_HOVER = "#2563EB"
+    DANGER = "#F43F5E"        # 取消按钮红
+    DANGER_HOVER = "#E11D48"
+    NEUTRAL = "#94A3B8"       # 退出按钮灰
+    NEUTRAL_HOVER = "#64748B"
+    OK_GREEN = "#16A34A"      # 安全状态
+    OK_RED = "#DC2626"        # 倒计时中状态
+
+    # =========================
+    # 任务持久化：Windows 注册表（不在目录里生成任何文件）
+    # =========================
+    REG_PATH = "Software\\ScheduledShutdown"
+    REG_VALUE = "target_time"
+
+    # 旧版本遗留的 shutdown_task.json（仅用于一次性迁移，读到后即删除）
+    if getattr(sys, "frozen", False):
+        OLD_SAVE_FILE = os.path.join(
+            os.path.dirname(os.path.abspath(sys.executable)),
+            "shutdown_task.json"
+        )
+    else:
+        OLD_SAVE_FILE = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "shutdown_task.json"
+        )
+
+    # ==================================================
+    # 小工具：卡片容器（标题 + 内容区）
+    # ==================================================
+    def make_card(self, parent, heading):
+
+        card = tk.Frame(
+            parent,
+            bg=self.CARD,
+            highlightbackground=self.BORDER,
+            highlightcolor=self.BORDER,
+            highlightthickness=1
+        )
+
+        tk.Label(
+            card,
+            text=heading,
+            bg=self.CARD,
+            fg=self.SUBTEXT,
+            font=("Microsoft YaHei", 8)
+        ).pack(anchor="w", padx=10, pady=(5, 0))
+
+        body = tk.Frame(card, bg=self.CARD)
+        body.pack(fill="x", padx=10, pady=(1, 7))
+
+        card.pack(fill="x", padx=14, pady=(3, 3))
+
+        return body
+
+    # ==================================================
+    # 小工具：扁平彩色按钮（带悬停变色）
+    # ==================================================
+    def flat_button(self, parent, text, command, bg, hover, wide=False, padx=0):
+
+        btn = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            font=("Microsoft YaHei", 9, "bold" if wide else "normal"),
+            bg=bg,
+            fg="white",
+            activebackground=hover,
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            width=10 if wide else 9,
+            padx=padx,
+            pady=2,
+            cursor="hand2",
+            highlightthickness=0
+        )
+
+        btn.bind("<Enter>", lambda _e: btn.config(bg=hover))
+        btn.bind("<Leave>", lambda _e: btn.config(bg=bg))
+
+        return btn
+
+    # ==================================================
+    # 小工具：窗口在屏幕上居中
+    # ==================================================
+    def center_window(self):
+
+        self.root.update_idletasks()
+
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+
+        x = (self.root.winfo_screenwidth() - width) // 2
+        # 稍微偏上一点，视觉上更正
+        y = (self.root.winfo_screenheight() - height) // 2 - 20
+
+        if x < 0:
+            x = 0
+        if y < 0:
+            y = 0
+
+        self.root.geometry(f"+{x}+{y}")
 
     def __init__(self, root):
 
         self.root = root
-        self.root.geometry("500x450")
+        self.root.title("Windows 定时关机工具")
+        self.root.geometry("370x330")
         self.root.resizable(False, False)
+        self.root.configure(bg=self.BG)
 
         self.shutdown_timer = None
         self.running = False
@@ -28,24 +137,18 @@ class ShutdownTimerApp:
         # =========================
         # 标题
         # =========================
-        title = tk.Label(
+        tk.Label(
             root,
-            text="Windows 定时关机工具",
-            font=("Microsoft YaHei", 18, "bold")
-        )
-        title.pack(pady=15)
+            text="定时关机",
+            font=("Microsoft YaHei", 13, "bold"),
+            bg=self.BG,
+            fg=self.TEXT
+        ).pack(pady=(12, 4))
 
         # =========================
         # ① 多少分钟后关机
         # =========================
-        frame1 = tk.LabelFrame(
-            root,
-            text="① 多少分钟后关机",
-            font=("Microsoft YaHei", 11, "bold"),
-            padx=15,
-            pady=12
-        )
-        frame1.pack(fill="x", padx=20, pady=5)
+        frame1 = self.make_card(root, "① 多少分钟后关机")
 
         self.minutes_var = tk.StringVar(value="30")
 
@@ -61,37 +164,33 @@ class ShutdownTimerApp:
                 "60",
                 "120"
             ],
-            width=10,
+            width=5,
             state="normal",
-            font=("Microsoft YaHei", 11)
+            font=("Microsoft YaHei", 10)
         )
-        minute_box.pack(side="left", padx=5)
+        minute_box.pack(side="left", padx=(0, 4))
 
         tk.Label(
             frame1,
             text="分钟后关机",
-            font=("Microsoft YaHei", 10)
-        ).pack(side="left", padx=5)
+            font=("Microsoft YaHei", 9),
+            bg=self.CARD,
+            fg=self.TEXT
+        ).pack(side="left")
 
-        tk.Button(
+        self.flat_button(
             frame1,
-            text="开始倒计时",
-            command=self.start_minutes,
-            width=13,
-            font=("Microsoft YaHei", 10)
-        ).pack(side="right", padx=5)
+            "开始倒计时",
+            self.start_minutes,
+            self.PRIMARY,
+            self.PRIMARY_HOVER,
+            padx=12
+        ).pack(side="right")
 
         # =========================
         # ② 指定时间关机
         # =========================
-        frame2 = tk.LabelFrame(
-            root,
-            text="② 指定时间关机",
-            font=("Microsoft YaHei", 11, "bold"),
-            padx=15,
-            pady=12
-        )
-        frame2.pack(fill="x", padx=20, pady=10)
+        frame2 = self.make_card(root, "② 指定时间关机")
 
         # 默认时间 = 当前时间 + 1小时
         default_time = (
@@ -109,21 +208,25 @@ class ShutdownTimerApp:
         tk.Entry(
             frame2,
             textvariable=self.hour_var,
-            width=5,
-            font=("Microsoft YaHei", 12),
-            justify="center"
+            width=4,
+            font=("Microsoft YaHei", 10),
+            justify="center",
+            relief="solid",
+            bd=1
         ).pack(
             side="left",
-            padx=(5, 2)
+            padx=(0, 2)
         )
 
         tk.Label(
             frame2,
             text="时",
-            font=("Microsoft YaHei", 10)
+            font=("Microsoft YaHei", 9),
+            bg=self.CARD,
+            fg=self.TEXT
         ).pack(
             side="left",
-            padx=(0, 8)
+            padx=(0, 6)
         )
 
         # =========================
@@ -136,52 +239,58 @@ class ShutdownTimerApp:
         tk.Entry(
             frame2,
             textvariable=self.minute_var,
-            width=5,
-            font=("Microsoft YaHei", 12),
-            justify="center"
+            width=4,
+            font=("Microsoft YaHei", 10),
+            justify="center",
+            relief="solid",
+            bd=1
         ).pack(
             side="left",
-            padx=(2, 2)
+            padx=(0, 2)
         )
 
         tk.Label(
             frame2,
             text="分",
-            font=("Microsoft YaHei", 10)
+            font=("Microsoft YaHei", 9),
+            bg=self.CARD,
+            fg=self.TEXT
         ).pack(
-            side="left",
-            padx=(0, 5)
+            side="left"
         )
 
         # 指定时间关机按钮
-        tk.Button(
+        self.flat_button(
             frame2,
-            text="指定时间关机",
-            command=self.start_specific_time,
-            width=13,
-            font=("Microsoft YaHei", 10)
+            "指定时间关机",
+            self.start_specific_time,
+            self.PRIMARY,
+            self.PRIMARY_HOVER,
+            padx=12
         ).pack(
-            side="right",
-            padx=5
+            side="right"
         )
 
         # =========================
         # 当前状态
         # =========================
-        status_frame = tk.Frame(root)
-        status_frame.pack(pady=12)
+        status_frame = tk.Frame(root, bg=self.BG)
+        status_frame.pack(pady=(6, 0))
 
         tk.Label(
             status_frame,
             text="当前状态：",
-            font=("Microsoft YaHei", 11, "bold")
+            font=("Microsoft YaHei", 10, "bold"),
+            bg=self.BG,
+            fg=self.TEXT
         ).pack(side="left")
 
         self.status_label = tk.Label(
             status_frame,
             text="未设置关机",
-            font=("Microsoft YaHei", 11),
-            fg="green"
+            font=("Microsoft YaHei", 10),
+            bg=self.BG,
+            fg=self.OK_GREEN
         )
         self.status_label.pack(side="left")
 
@@ -191,38 +300,40 @@ class ShutdownTimerApp:
         self.countdown_label = tk.Label(
             root,
             text="--:--:--",
-            font=("Consolas", 32, "bold")
+            font=("Consolas", 22, "bold"),
+            bg=self.BG,
+            fg=self.TEXT
         )
-        self.countdown_label.pack(pady=5)
+        self.countdown_label.pack()
 
         # =========================
         # 操作按钮
         # =========================
-        button_frame = tk.Frame(root)
-        button_frame.pack(pady=12)
+        button_frame = tk.Frame(root, bg=self.BG)
+        button_frame.pack(pady=(6, 4))
 
-        tk.Button(
+        self.flat_button(
             button_frame,
-            text="取消关机",
-            command=self.cancel_shutdown,
-            width=15,
-            height=2,
-            font=("Microsoft YaHei", 11, "bold")
+            "取消关机",
+            self.cancel_shutdown,
+            self.DANGER,
+            self.DANGER_HOVER,
+            wide=True
         ).pack(
             side="left",
-            padx=8
+            padx=5
         )
 
-        tk.Button(
+        self.flat_button(
             button_frame,
-            text="退出程序",
-            command=self.close_program,
-            width=15,
-            height=2,
-            font=("Microsoft YaHei", 11, "bold")
+            "退出程序",
+            self.close_program,
+            self.NEUTRAL,
+            self.NEUTRAL_HOVER,
+            wide=True
         ).pack(
             side="left",
-            padx=8
+            padx=5
         )
 
         # =========================
@@ -231,17 +342,23 @@ class ShutdownTimerApp:
         tk.Label(
             root,
             text="指定时间默认设置为当前时间 + 1小时",
-            font=("Microsoft YaHei", 9),
-            fg="gray"
+            font=("Microsoft YaHei", 8),
+            bg=self.BG,
+            fg=self.SUBTEXT
         ).pack(
             side="bottom",
-            pady=10
+            pady=(0, 6)
         )
 
         # =========================
         # 启动时恢复之前的任务
         # =========================
         self.load_saved_task()
+
+        # =========================
+        # 打开时窗口居中
+        # =========================
+        self.center_window()
 
     # ==================================================
     # 保存任务
@@ -251,26 +368,24 @@ class ShutdownTimerApp:
         if self.target_time is None:
             return
 
-        data = {
-            "target_time": self.target_time.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        }
-
         try:
 
-            with open(
-                self.SAVE_FILE,
-                "w",
-                encoding="utf-8"
-            ) as f:
+            key = winreg.CreateKey(
+                winreg.HKEY_CURRENT_USER,
+                self.REG_PATH
+            )
 
-                json.dump(
-                    data,
-                    f,
-                    ensure_ascii=False,
-                    indent=4
+            winreg.SetValueEx(
+                key,
+                self.REG_VALUE,
+                0,
+                winreg.REG_SZ,
+                self.target_time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
                 )
+            )
+
+            winreg.CloseKey(key)
 
         except Exception:
             pass
@@ -282,34 +397,100 @@ class ShutdownTimerApp:
 
         try:
 
-            if os.path.exists(self.SAVE_FILE):
-                os.remove(self.SAVE_FILE)
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                self.REG_PATH,
+                0,
+                winreg.KEY_SET_VALUE
+            )
+
+            winreg.DeleteValue(key, self.REG_VALUE)
+            winreg.CloseKey(key)
+
+        except Exception:
+            pass
+
+        # 顺手清掉旧版本遗留的 json 文件
+        try:
+
+            if os.path.exists(self.OLD_SAVE_FILE):
+                os.remove(self.OLD_SAVE_FILE)
 
         except Exception:
             pass
 
     # ==================================================
-    # 程序启动时恢复任务
+    # 读取旧版本 shutdown_task.json（一次性迁移用）
+    # 无论成败都会把旧文件删掉，不留残留
     # ==================================================
-    def load_saved_task(self):
+    def read_legacy_task(self):
 
-        if not os.path.exists(self.SAVE_FILE):
-            return
+        if not os.path.exists(self.OLD_SAVE_FILE):
+            return None
 
         try:
 
             with open(
-                self.SAVE_FILE,
+                self.OLD_SAVE_FILE,
                 "r",
                 encoding="utf-8"
             ) as f:
 
                 data = json.load(f)
 
-            target_text = data.get("target_time")
+            text = data.get("target_time")
 
-            if not target_text:
-                return
+        except Exception:
+
+            text = None
+
+        try:
+
+            os.remove(self.OLD_SAVE_FILE)
+
+        except Exception:
+            pass
+
+        return text
+
+    # ==================================================
+    # 程序启动时恢复任务
+    # ==================================================
+    def load_saved_task(self):
+
+        target_text = None
+
+        # ---------- 注册表 ----------
+        try:
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                self.REG_PATH
+            )
+
+            target_text = winreg.QueryValueEx(
+                key,
+                self.REG_VALUE
+            )[0]
+
+            winreg.CloseKey(key)
+
+        except Exception:
+
+            target_text = None
+
+        # ---------- 旧版 json 文件迁移 ----------
+        legacy = False
+
+        if not target_text:
+
+            target_text = self.read_legacy_task()
+            legacy = True
+
+        if not target_text:
+            return
+
+        try:
 
             target = datetime.datetime.strptime(
                 target_text,
@@ -329,12 +510,17 @@ class ShutdownTimerApp:
             self.target_time = target
             self.running = True
 
+            # 旧任务迁移到注册表
+            if legacy:
+
+                self.save_task()
+
             # =========================
             # 这里只显示时间，不显示日期
             # =========================
             self.status_label.config(
                 text=f"{target.strftime('%H:%M')} 关机",
-                fg="red"
+                fg=self.OK_RED
             )
 
             # 恢复倒计时
@@ -342,7 +528,7 @@ class ShutdownTimerApp:
 
         except Exception:
 
-            # 保存文件损坏
+            # 保存的数据损坏
             self.delete_saved_task()
 
     # ==================================================
@@ -439,7 +625,7 @@ class ShutdownTimerApp:
         # 更新状态
         self.status_label.config(
             text=f"{minutes} 分钟后关机",
-            fg="red"
+            fg=self.OK_RED
         )
 
         # 开始倒计时
@@ -519,7 +705,7 @@ class ShutdownTimerApp:
         # =========================
         self.status_label.config(
             text=f"{target.strftime('%H:%M')} 关机",
-            fg="red"
+            fg=self.OK_RED
         )
 
         # 开始倒计时
@@ -616,7 +802,7 @@ class ShutdownTimerApp:
         # 更新界面
         self.status_label.config(
             text="已取消关机",
-            fg="green"
+            fg=self.OK_GREEN
         )
 
         self.countdown_label.config(
