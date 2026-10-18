@@ -410,6 +410,17 @@ class ShutdownTimerApp:
         except Exception:
             pass
 
+        # 值删完后把整个空键也删掉（更干净）
+        # DeleteKey 只删键，不删子键；没有子键或键不存在时会报错，
+        # 这里忽略报错即可，下次 save_task 的 CreateKey 会重建
+        try:
+            winreg.DeleteKey(
+                winreg.HKEY_CURRENT_USER,
+                self.REG_PATH
+            )
+        except Exception:
+            pass
+
         # 顺手清掉旧版本遗留的 json 文件
         try:
 
