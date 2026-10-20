@@ -38,24 +38,8 @@ PREVIEW_SIZE = 280  # 预览图最大尺寸
 class QRApp:
     def __init__(self, root):
         self.root = root
-        root.title("二维码互转工具")
+        root.title("二维码工具")
         root.resizable(False, False)
-        # 设置窗口标题栏左上角图标（兼容 exe 打包与脚本运行两种场景）
-        try:
-            icon_path = ""
-            if getattr(os.sys, 'frozen', False):
-                # exe 打包：优先 exe 同目录（用户可替换自定义图标），其次打包内置的临时目录
-                exe_dir = os.path.dirname(os.sys.executable)
-                if os.path.exists(os.path.join(exe_dir, 'app_icon.ico')):
-                    icon_path = os.path.join(exe_dir, 'app_icon.ico')
-                elif getattr(os.sys, '_MEIPASS', '') and os.path.exists(os.path.join(os.sys._MEIPASS, 'app_icon.ico')):
-                    icon_path = os.path.join(os.sys._MEIPASS, 'app_icon.ico')
-            else:
-                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_icon.ico')
-            if icon_path and os.path.exists(icon_path):
-                root.iconbitmap(icon_path)
-        except Exception:
-            pass
         root.withdraw()          # 暂时隐藏，避免闪烁
         self.qr_photo = None      # 缓存预览图以防止被GC
         self.src_photo = None
