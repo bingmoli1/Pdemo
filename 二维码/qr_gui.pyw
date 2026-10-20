@@ -298,9 +298,7 @@ class QRApp:
         if not self.last_link:
             messagebox.showwarning("提示", "还没有解码结果")
             return
-        if not self.last_link.lower().startswith(("http://", "https://")):
-            messagebox.showinfo("提示", "识别内容不是网址链接：\n" + self.last_link)
-            return
+        # 不判断格式，直接交给默认浏览器打开
         webbrowser.open(self.last_link)
         self.set_status("已使用默认浏览器打开：" + self.last_link)
 
