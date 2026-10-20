@@ -8,7 +8,6 @@
 """
 
 import os
-import time
 import uuid
 import webbrowser
 import tkinter as tk
@@ -35,6 +34,7 @@ except ImportError:
 
 PREVIEW_SIZE = 280  # 预览图最大尺寸
 
+
 class QRApp:
     def __init__(self, root):
         self.root = root
@@ -56,21 +56,26 @@ class QRApp:
 
         # 居中后直接显示，无闪烁
         root.deiconify()         # 恢复显示
-        
+
         # 注册拖拽事件（如果安装了 tkinterdnd2）
         if TkinterDnD:
             self.root.drop_target_register(DND_FILES)
             self.root.dnd_bind('<<Drop>>', self.handle_drop)
 
+    # ------------------------------------------------------------------
+    # 生成二维码
+    # ------------------------------------------------------------------
     def _do_gen_qr(self, link: str, verbose: bool):
         """生成二维码。verbose=True 时出错误弹窗，False 时静默（自动检测用）。"""
         try:
             qr = qrcode.QRCode(
                 error_correction=qrcode.constants.ERROR_CORRECT_H,
                 box_size=10, border=4)
-            qr.add_data(link)
+            # 关键：显式以 UTF-8 字节写入，避免不同 qrcode 版本对 str 的编码差异
+            qr.add_data(link.encode("utf-8"))
             qr.make(fit=True)
-            self.qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+            self.qr_image = qr.make_image(
+                fill_color="black", back_color="white").convert("RGB")
         except Exception as e:
             if verbose:
                 messagebox.showerror("生成失败", str(e))
@@ -81,30 +86,6 @@ class QRApp:
         self.qr_label.configure(image=self.qr_photo, text="")
         self.set_status(f"二维码已生成：{link}")
 
-    def _auto_decode(self, img: Image.Image, verbose: bool):
-        """静默解码（不弹窗）。"""
-        if zbar_decode is None:
-            if verbose:
-                messagebox.showerror("错误", "缺少 pyzbar 库，请安装：pip install pyzbar")
-            return
-        self._show_preview(img)
-        results = zbar_decode(img)
-        if not results:
-            big = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
-            results = zbar_decode(big)
-        if not results:
-            self.result_var.set("")
-            self.last_link = ""
-            self.set_status("识别失败")
-            return
-        text = self._smart_decode(results[0].data)
-        self.last_link = text
-        self.result_var.set(text)
-        if text.lower().startswith(("http://", "https://")):
-            self.set_status("识别成功：" + text + "（点击“浏览器打开链接”可打开）")
-        else:
-            self.set_status("识别成功：" + text)
-
     def gen_qr(self):
         link = self.link_var.get().strip()
         if not link:
@@ -112,6 +93,141 @@ class QRApp:
             return
         self._do_gen_qr(link, verbose=True)
 
+    # ------------------------------------------------------------------
+    # 解码公共逻辑
+    # ------------------------------------------------------------------
+    def _apply_decode_result(self, text: str):
+        """把解码结果写入 UI 与状态栏。"""
+        self.last_link = text
+        self.result_var.set(text)
+        if text.lower().startswith(("http://", "https://")):
+            self.set_status("识别成功：" + text + "（点击“浏览器打开链接”可打开）")
+        else:
+            self.set_status("识别成功：" + text)
+
+    def _decode_image(self, img: Image.Image, verbose: bool):
+        """统一解码入口。verbose=True 时识别失败弹窗。"""
+        if zbar_decode is None:
+            if verbose:
+                messagebox.showerror("错误", "缺少 pyzbar 库，请安装：pip install pyzbar")
+            return
+
+        self._show_preview(img)
+        results = zbar_decode(img)
+        if not results:
+            # 放大重试：用 NEAREST 避免插值灰边导致误识别
+            big = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
+            results = zbar_decode(big)
+        if not results:
+            self.result_var.set("")
+            self.last_link = ""
+            if verbose:
+                messagebox.showerror("识别失败", "没有识别到二维码，请尝试更清晰的图片")
+            self.set_status("识别失败")
+            return
+
+        text = self._smart_decode(results[0].data)
+        self._apply_decode_result(text)
+
+    def decode(self, img: Image.Image):
+        """用户主动选择/粘贴/拖入图片时调用（失败弹窗）。"""
+        self._decode_image(img, verbose=True)
+
+    # ------------------------------------------------------------------
+    # 字节解码（核心：兼容多种 mojibake）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _cjk_ratio(s: str) -> float:
+        """统计 CJK 汉字占比，用于挑选最像正常文本的候选。"""
+        if not s:
+            return 0.0
+        total = 0
+        cjk = 0
+        for c in s:
+            if c.isspace():
+                continue
+            total += 1
+            o = ord(c)
+            # 基本汉字 + 扩展A + 兼容汉字
+            if (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF) or (0xF900 <= o <= 0xFAFF):
+                cjk += 1
+        return cjk / total if total else 0.0
+
+    @staticmethod
+    def _is_mojibake(s: str) -> bool:
+        """粗略判断 s 是否像 mojibake（含大量拉丁扩展/生僻符号但不像正常文本）。"""
+        if not s:
+            return False
+        # 含替换符 → 一定坏
+        if "\ufffd" in s:
+            return True
+        # 含大量 Latin-1 扩展区字符（如 ä½ å¥½）→ 典型 latin-1 mojibake
+        latin_like = sum(1 for c in s if 0x80 <= ord(c) <= 0x024F)
+        if latin_like and latin_like / max(1, len(s)) > 0.3:
+            return True
+        # 含大量 CJK 兼容/生僻区字符（如 蝸ｯ蟇ｹ蝠頑弍）→ 典型 gbk mojibake
+        rare_cjk = sum(1 for c in s if 0x3400 <= ord(c) <= 0x4DBF
+                       or 0xF900 <= ord(c) <= 0xFAFF
+                       or 0x20000 <= ord(c) <= 0x2FFFF)
+        if rare_cjk and rare_cjk / max(1, len(s)) > 0.3:
+            return True
+        return False
+
+    @staticmethod
+    def _smart_decode(data: bytes) -> str:
+        """
+        兼容多种情况：
+        1. data 是原始 UTF-8 字节 → 直接 UTF-8 解
+        2. data 是 "UTF-8 字节被 Latin-1 显示后再 encode" 的产物 → latin-1 mojibake 修复
+        3. data 是 "UTF-8 字节被 GBK 解后再 encode" 的产物 → gbk mojibake 修复
+        4. data 是 GBK/Big5 等中文编码原始字节 → 按顺序尝试
+        """
+        # 先拿 UTF-8 候选
+        utf8_str = None
+        try:
+            utf8_str = data.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+
+        if utf8_str is not None:
+            # 若 UTF-8 解出来像乱码，尝试两种 mojibake 修复
+            if QRApp._is_mojibake(utf8_str):
+                candidates = []
+                # latin-1 方向
+                try:
+                    candidates.append(utf8_str.encode("latin-1").decode("utf-8"))
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    pass
+                # gbk 方向
+                try:
+                    candidates.append(utf8_str.encode("gbk").decode("utf-8"))
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    pass
+                # 选「汉字占比最高」且无替换符的
+                candidates = [c for c in candidates if "\ufffd" not in c]
+                if candidates:
+                    best = max(candidates, key=QRApp._cjk_ratio)
+                    # 修复结果明显更"正常"才采用
+                    if QRApp._cjk_ratio(best) > QRApp._cjk_ratio(utf8_str) + 0.1:
+                        return best
+
+            if "\ufffd" not in utf8_str:
+                return utf8_str
+
+        # 原始字节本身就是 GBK/Big5 等编码的情况
+        for enc in ("gb18030", "gbk", "big5", "shift_jis"):
+            try:
+                s = data.decode(enc)
+                if "\ufffd" not in s and not QRApp._is_mojibake(s):
+                    return s
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+
+        return data.decode("utf-8", errors="replace")
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
     def _build_ui(self):
         body = ttk.Frame(self.root)
         body.pack(fill="both", expand=True, padx=10, pady=8)
@@ -166,7 +282,8 @@ class QRApp:
         row4 = ttk.Frame(dbox)
         row4.pack(fill="x", padx=20)
         self.result_var = tk.StringVar()
-        self.result_entry = ttk.Entry(row4, textvariable=self.result_var, state="readonly", width=40)
+        self.result_entry = ttk.Entry(row4, textvariable=self.result_var,
+                                      state="readonly", width=40)
         self.result_entry.pack(fill="x")
 
         row5 = ttk.Frame(dbox)
@@ -183,6 +300,9 @@ class QRApp:
     def set_status(self, text: str):
         self.status_var.set("  " + text)
 
+    # ------------------------------------------------------------------
+    # 按钮回调
+    # ------------------------------------------------------------------
     def save_qr(self):
         if self.qr_image is None:
             messagebox.showwarning("提示", "请先生成二维码")
@@ -200,7 +320,8 @@ class QRApp:
     def pick_image(self):
         path = filedialog.askopenfilename(
             title="选择二维码图片",
-            filetypes=[("图像文件", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"), ("所有文件", "*.*")])
+            filetypes=[("图像文件", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+                       ("所有文件", "*.*")])
         if not path:
             return
         try:
@@ -230,10 +351,10 @@ class QRApp:
     def handle_drop(self, event):
         """处理文件拖入事件"""
         path = event.data
-        # 处理 Windows 下路径带 {} 的情况 (例如 {C:/Path With Space/img.png})
+        # 处理 Windows 下路径带 {} 的情况
         if path.startswith('{') and path.endswith('}'):
             path = path[1:-1]
-        
+
         try:
             img = Image.open(path).convert("RGB")
             self.src_name_var.set(os.path.basename(path))
@@ -242,65 +363,28 @@ class QRApp:
         except Exception as e:
             messagebox.showerror("解析失败", f"无法解析拖入的文件：{e}")
 
-    def decode(self, img: Image.Image):
-        if zbar_decode is None:
-            messagebox.showerror("错误", "缺少 pyzbar 库，请安装：pip install pyzbar")
-            return
-        self._show_preview(img)
-        results = zbar_decode(img)
-        if not results:
-            big = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
-            results = zbar_decode(big)
-        if not results:
-            self.result_var.set("")
-            self.last_link = ""
-            messagebox.showerror("识别失败", "没有识别到二维码，请尝试更清晰的图片")
-            self.set_status("识别失败")
-            return
-
-        text = self._smart_decode(results[0].data)
-        self.last_link = text
-        self.result_var.set(text)
-        if text.lower().startswith(("http://", "https://")):
-            self.set_status("识别成功：" + text + "（点击“浏览器打开链接”可打开）")
-        else:
-            self.set_status("识别成功：" + text)
-
-    @staticmethod
-    def _smart_decode(data: bytes) -> str:
-        plain = None
-        for enc in ("utf-8", "gbk", "big5", "shift_jis"):
-            try:
-                s = data.decode(enc)
-                if "\ufffd" not in s:
-                    plain = s
-                    break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-        try:
-            mojibake = data.decode("utf-8")
-            recovered = mojibake.encode("latin-1")
-            fixed = recovered.decode("utf-8")
-            if "\ufffd" not in fixed:
-                return fixed
-        except (UnicodeDecodeError, UnicodeError, UnicodeEncodeError):
-            pass
-        if plain is not None:
-            return plain
-        return data.decode("utf-8", errors="replace")
-
-    def _show_preview(self, img: Image.Image):
-        preview = self._scale(img)
-        self.src_photo = ImageTk.PhotoImage(preview)
-        self.src_label.configure(image=self.src_photo, text="")
-
     def open_link(self):
         if not self.last_link:
             messagebox.showwarning("提示", "还没有解码结果")
             return
-        # 不判断格式，直接交给默认浏览器打开
         webbrowser.open(self.last_link)
         self.set_status("已使用默认浏览器打开：" + self.last_link)
+
+    def copy_link(self):
+        if not self.last_link:
+            messagebox.showwarning("提示", "还没有解码结果")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.last_link)
+        self.set_status("已复制到剪贴板")
+
+    # ------------------------------------------------------------------
+    # 工具方法
+    # ------------------------------------------------------------------
+    def _show_preview(self, img: Image.Image):
+        preview = self._scale(img)
+        self.src_photo = ImageTk.PhotoImage(preview)
+        self.src_label.configure(image=self.src_photo, text="")
 
     def _copy_qr(self):
         try:
@@ -350,21 +434,15 @@ class QRApp:
         finally:
             user32.CloseClipboard()
 
-    def copy_link(self):
-        if not self.last_link:
-            messagebox.showwarning("提示", "还没有解码结果")
-            return
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.last_link)
-        self.set_status("已复制到剪贴板")
-
     @staticmethod
     def _scale(img: Image.Image) -> Image.Image:
         w, h = img.size
         ratio = min(PREVIEW_SIZE / w, PREVIEW_SIZE / h, 1.0)
         if ratio < 1.0:
-            img = img.resize((max(1, int(w * ratio)), max(1, int(h * ratio))), Image.NEAREST)
+            img = img.resize((max(1, int(w * ratio)), max(1, int(h * ratio))),
+                             Image.NEAREST)
         return img
+
 
 def main():
     # 使用 TkinterDnD.Tk 代替 tk.Tk 以支持拖拽 (如果可用)
@@ -372,7 +450,7 @@ def main():
         root = TkinterDnD.Tk()
     else:
         root = tk.Tk()
-    
+
     try:
         style = ttk.Style(root)
         if "vista" in style.theme_names():
@@ -382,6 +460,7 @@ def main():
     root.withdraw()   # 创建后立即隐藏，彻底避免窗口闪现
     QRApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
