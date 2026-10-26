@@ -33,6 +33,10 @@ class ShutdownTimerApp:
     REG_PATH = "Software\\ScheduledShutdown"
     REG_VALUE = "target_time"
 
+    # 启动 shutdown.exe 时不创建控制台窗口：
+    # exe 是无控制台打包的，不加这个每次执行命令都会闪一下黑窗
+    NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
     # 旧版本遗留的 shutdown_task.json（仅用于一次性迁移，读到后即删除）
     if getattr(sys, "frozen", False):
         OLD_SAVE_FILE = os.path.join(
@@ -493,7 +497,12 @@ class ShutdownTimerApp:
         # ---------- 旧版 json 文件迁移 ----------
         legacy = False
 
-        if not target_text:
+        if target_text:
+
+            # 注册表里已有任务，旧文件已无用途，顺手清理
+            self.read_legacy_task()
+
+        else:
 
             target_text = self.read_legacy_task()
             legacy = True
@@ -526,6 +535,29 @@ class ShutdownTimerApp:
 
                 self.save_task()
 
+            # 系统级关机命令不跨重启保留：
+            # 这里按剩余秒数重新下发，保证电脑到点真的会关机
+            remaining = int(
+                (target - now).total_seconds()
+            )
+
+            if not self.execute_shutdown(
+                remaining
+            ):
+
+                self.running = False
+                self.target_time = None
+                self.delete_saved_task()
+
+                messagebox.showerror(
+                    "错误",
+                    "设置关机失败，之前保存的任务已丢弃。\n\n"
+                    "如果系统策略（组策略）禁止通过命令行关机，"
+                    "则本功能无法使用。"
+                )
+
+                return
+
             # =========================
             # 这里只显示时间，不显示日期
             # =========================
@@ -546,10 +578,15 @@ class ShutdownTimerApp:
     # 执行 Windows 关机
     # ==================================================
     def execute_shutdown(self, seconds):
+        """
+        执行 Windows 关机命令。
+        成功返回 True，失败返回 False，
+        调用方必须检查返回值，失败时不能假倒计时。
+        """
 
         try:
 
-            subprocess.run(
+            result = subprocess.run(
                 [
                     "shutdown",
                     "/s",
@@ -557,17 +594,17 @@ class ShutdownTimerApp:
                     "/t",
                     str(seconds)
                 ],
-                shell=True,
+                shell=False,
+                creationflags=self.NO_WINDOW,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
 
-        except Exception as e:
+            return result.returncode == 0
 
-            messagebox.showerror(
-                "错误",
-                f"设置关机失败：\n{e}"
-            )
+        except Exception:
+
+            return False
 
     # ==================================================
     # 取消 Windows 系统关机
@@ -581,12 +618,13 @@ class ShutdownTimerApp:
                     "shutdown",
                     "/a"
                 ],
-                shell=True,
+                shell=False,
+                creationflags=self.NO_WINDOW,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
 
-        except:
+        except Exception:
             pass
 
     # ==================================================
@@ -625,10 +663,23 @@ class ShutdownTimerApp:
 
         self.running = True
 
-        # 设置 Windows 关机
-        self.execute_shutdown(
+        # 设置 Windows 关机（检查结果，失败则回滚，不能假倒计时）
+        if not self.execute_shutdown(
             minutes * 60
-        )
+        ):
+
+            self.running = False
+            self.target_time = None
+            self.delete_saved_task()
+
+            messagebox.showerror(
+                "错误",
+                "设置关机失败。\n\n"
+                "如果系统策略（组策略）禁止通过命令行关机，"
+                "则本功能无法使用。"
+            )
+
+            return
 
         # 保存任务
         self.save_task()
@@ -703,10 +754,23 @@ class ShutdownTimerApp:
         self.target_time = target
         self.running = True
 
-        # 设置 Windows 关机
-        self.execute_shutdown(
+        # 设置 Windows 关机（检查结果，失败则回滚，不能假倒计时）
+        if not self.execute_shutdown(
             seconds
-        )
+        ):
+
+            self.running = False
+            self.target_time = None
+            self.delete_saved_task()
+
+            messagebox.showerror(
+                "错误",
+                "设置关机失败。\n\n"
+                "如果系统策略（组策略）禁止通过命令行关机，"
+                "则本功能无法使用。"
+            )
+
+            return
 
         # 保存任务
         self.save_task()
@@ -723,6 +787,24 @@ class ShutdownTimerApp:
         self.update_countdown()
 
     # ==================================================
+    # 小工具：停止内部 1 秒倒计时定时器
+    # ==================================================
+    def stop_timer(self):
+
+        if self.shutdown_timer is not None:
+
+            try:
+
+                self.root.after_cancel(
+                    self.shutdown_timer
+                )
+
+            except Exception:
+                pass
+
+            self.shutdown_timer = None
+
+    # ==================================================
     # 更新倒计时
     # ==================================================
     def update_countdown(self):
@@ -732,6 +814,10 @@ class ShutdownTimerApp:
 
         if self.target_time is None:
             return
+
+        # 先停掉可能残留的旧回调（例如上一个任务遗留的），
+        # 防止多条 1 秒刷新链并行运行
+        self.stop_timer()
 
         now = datetime.datetime.now()
 
@@ -751,9 +837,21 @@ class ShutdownTimerApp:
             )
 
             self.running = False
+            self.stop_timer()
 
             # 删除保存的任务
             self.delete_saved_task()
+
+            # 兜底关机：正常路径在开始时已下发过系统命令，
+            # 但如果重启后系统里已没有该命令，就必须在这里
+            # 直接补发立即关机，保证电脑到点真的会关
+            self.execute_shutdown(0)
+
+            # 同步状态栏，避免红色"XX:XX 关机"停留误导
+            self.status_label.config(
+                text="正在关机",
+                fg=self.OK_RED
+            )
 
             return
 
@@ -792,20 +890,7 @@ class ShutdownTimerApp:
         # 停止内部计时
         self.running = False
         self.target_time = None
-
-        # 取消 after 定时器
-        if self.shutdown_timer is not None:
-
-            try:
-
-                self.root.after_cancel(
-                    self.shutdown_timer
-                )
-
-            except:
-                pass
-
-            self.shutdown_timer = None
+        self.stop_timer()
 
         # 删除保存任务
         self.delete_saved_task()
@@ -830,17 +915,7 @@ class ShutdownTimerApp:
         # 不取消 Windows 的关机任务
 
         self.running = False
-
-        if self.shutdown_timer is not None:
-
-            try:
-
-                self.root.after_cancel(
-                    self.shutdown_timer
-                )
-
-            except:
-                pass
+        self.stop_timer()
 
         self.root.destroy()
 
