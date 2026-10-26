@@ -5,7 +5,53 @@ import datetime
 import json
 import os
 import sys
+import ctypes
 import winreg
+
+
+# ======================================================
+# 高分屏适配：按真实 DPI 渲染，避免文字发虚
+# 必须在创建 Tk 窗口之前调用
+#
+# 注意只能用"系统 DPI 感知"(1)，不能用 per-monitor (2)：
+# per-monitor 模式下 Windows 会自行移动/缩放跨屏窗口，
+# 而 Tk 不处理对应的 WM_DPICHANGED 消息，两边争抢窗口矩形，
+# 窗口位置就会乱跳乱闪。系统 DPI 感知由系统统一缩放，
+# 位置稳定，主显示器上文字依然是清晰的。
+# ======================================================
+def enable_windows_dpi_awareness():
+
+    if sys.platform != "win32":
+        return
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+# ======================================================
+# 单实例保护：
+# 两个实例同时倒计时时，先开的那个到点会补发立即关机，
+# 会把后开实例设置的更长任务提前打断，所以只允许运行一个
+# ======================================================
+def another_instance_running():
+
+    if sys.platform != "win32":
+        return False
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    kernel32.CreateMutexW(
+        None,
+        False,
+        "Local\\ScheduledShutdownTool"
+    )
+
+    return ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
 
 
 class ShutdownTimerApp:
@@ -24,6 +70,7 @@ class ShutdownTimerApp:
     DANGER_HOVER = "#E11D48"
     NEUTRAL = "#94A3B8"       # 退出按钮灰
     NEUTRAL_HOVER = "#64748B"
+    DISABLED = "#CBD5E1"      # 置灰按钮
     OK_GREEN = "#16A34A"      # 安全状态
     OK_RED = "#DC2626"        # 倒计时中状态
 
@@ -32,6 +79,11 @@ class ShutdownTimerApp:
     # =========================
     REG_PATH = "Software\\ScheduledShutdown"
     REG_VALUE = "target_time"
+
+    # shutdown /t 的上限（秒）：文档写的是 10 年（315360000），
+    # 但实测部分 Win11 版本对该值返回错误 87，
+    # 这里按实测可用的 30 天（2592000）限制，对关机定时足够了
+    SHUTDOWN_MAX_SECONDS = 2592000
 
     # 启动 shutdown.exe 时不创建控制台窗口：
     # exe 是无控制台打包的，不加这个每次执行命令都会闪一下黑窗
@@ -48,6 +100,13 @@ class ShutdownTimerApp:
             os.path.dirname(os.path.abspath(__file__)),
             "shutdown_task.json"
         )
+
+    # ==================================================
+    # 小工具：按实际 DPI 缩放设计像素（96 DPI 为基准）
+    # ==================================================
+    def px(self, value):
+
+        return int(value * self.ui_scale)
 
     # ==================================================
     # 小工具：卡片容器（标题 + 内容区）
@@ -68,17 +127,17 @@ class ShutdownTimerApp:
             bg=self.CARD,
             fg=self.SUBTEXT,
             font=("Microsoft YaHei", 8)
-        ).pack(anchor="w", padx=10, pady=(5, 0))
+        ).pack(anchor="w", padx=self.px(10), pady=(self.px(5), 0))
 
         body = tk.Frame(card, bg=self.CARD)
-        body.pack(fill="x", padx=10, pady=(1, 7))
+        body.pack(fill="x", padx=self.px(10), pady=(self.px(1), self.px(7)))
 
-        card.pack(fill="x", padx=14, pady=(3, 3))
+        card.pack(fill="x", padx=self.px(14), pady=(self.px(3), self.px(3)))
 
         return body
 
     # ==================================================
-    # 小工具：扁平彩色按钮（带悬停变色）
+    # 小工具：扁平彩色按钮（带悬停变色，置灰时不响应悬停）
     # ==================================================
     def flat_button(self, parent, text, command, bg, hover, wide=False, padx=0):
 
@@ -94,19 +153,31 @@ class ShutdownTimerApp:
             relief="flat",
             bd=0,
             width=10 if wide else 9,
-            padx=padx,
-            pady=2,
+            padx=self.px(padx),
+            pady=self.px(2),
             cursor="hand2",
             highlightthickness=0
         )
 
-        btn.bind("<Enter>", lambda _e: btn.config(bg=hover))
-        btn.bind("<Leave>", lambda _e: btn.config(bg=bg))
+        def on_enter(_event):
+
+            if str(btn["state"]) == "normal":
+                btn.config(bg=hover)
+
+        def on_leave(_event):
+
+            if str(btn["state"]) == "normal":
+                btn.config(bg=bg)
+
+        btn.bind("<Enter>", on_enter)
+        btn.bind("<Leave>", on_leave)
 
         return btn
 
     # ==================================================
     # 小工具：窗口在屏幕上居中
+    # 窗口处于 withdraw 隐藏状态时 winfo_width 可能返回 1，
+    # 此时退回用请求尺寸计算
     # ==================================================
     def center_window(self):
 
@@ -115,9 +186,15 @@ class ShutdownTimerApp:
         width = self.root.winfo_width()
         height = self.root.winfo_height()
 
+        if width <= 1:
+            width = self.root.winfo_reqwidth()
+
+        if height <= 1:
+            height = self.root.winfo_reqheight()
+
         x = (self.root.winfo_screenwidth() - width) // 2
         # 稍微偏上一点，视觉上更正
-        y = (self.root.winfo_screenheight() - height) // 2 - 20
+        y = (self.root.winfo_screenheight() - height) // 2 - self.px(20)
 
         if x < 0:
             x = 0
@@ -126,17 +203,86 @@ class ShutdownTimerApp:
 
         self.root.geometry(f"+{x}+{y}")
 
+    # ==================================================
+    # 小工具：目标时间转状态栏文案
+    # 跨天的任务带上日期，避免"明天关机"只显示 HH:MM 造成误解
+    # ==================================================
+    def describe_target(self, target):
+
+        today = datetime.date.today()
+
+        if target.date() == today:
+            return f"{target.strftime('%H:%M')} 关机"
+
+        if target.date() == today + datetime.timedelta(days=1):
+            return f"明天 {target.strftime('%H:%M')} 关机"
+
+        return f"{target.strftime('%m-%d %H:%M')} 关机"
+
+    # ==================================================
+    # 小工具：取消按钮的可用/置灰状态
+    # ==================================================
+    def set_cancel_enabled(self, enabled):
+
+        if enabled:
+            self.cancel_btn.config(
+                state="normal",
+                bg=self.DANGER
+            )
+        else:
+            self.cancel_btn.config(
+                state="disabled",
+                bg=self.DISABLED
+            )
+
     def __init__(self, root):
 
         self.root = root
+
+        # 先隐藏窗口，等位置摆好再显示，
+        # 避免启动时窗口先出现在默认位置、再跳到居中位置的闪跳
+        root.withdraw()
+
         self.root.title("Windows 定时关机工具")
-        self.root.geometry("370x330")
-        self.root.resizable(False, False)
         self.root.configure(bg=self.BG)
+        self.root.resizable(False, False)
+
+        # 96 DPI 设计尺寸，按实际 DPI 等比放大
+        self.ui_scale = max(1.0, root.winfo_fpixels("1i") / 96.0)
+        self.root.geometry(f"{self.px(370)}x{self.px(330)}")
 
         self.shutdown_timer = None
         self.running = False
         self.target_time = None
+
+        # =========================
+        # ttk 风格：下拉框配色与扁平卡片统一
+        # =========================
+        style = ttk.Style()
+        # clam 主题允许自由配色，原生 vista 主题改不了外观
+        style.theme_use("clam")
+        style.configure(
+            "Card.TCombobox",
+            fieldbackground=self.CARD,
+            background=self.CARD,
+            foreground=self.TEXT,
+            arrowcolor=self.SUBTEXT,
+            bordercolor=self.BORDER,
+            lightcolor=self.CARD,
+            darkcolor=self.CARD,
+            borderwidth=1,
+            padding=(self.px(4), self.px(3))
+        )
+        style.map(
+            "Card.TCombobox",
+            bordercolor=[("focus", self.PRIMARY)]
+        )
+
+        root.option_add("*TCombobox*Listbox.background", self.CARD)
+        root.option_add("*TCombobox*Listbox.foreground", self.TEXT)
+        root.option_add("*TCombobox*Listbox.selectBackground", self.PRIMARY)
+        root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        root.option_add("*TCombobox*Listbox.font", ("Microsoft YaHei", 10))
 
         # =========================
         # 标题
@@ -147,7 +293,7 @@ class ShutdownTimerApp:
             font=("Microsoft YaHei", 13, "bold"),
             bg=self.BG,
             fg=self.TEXT
-        ).pack(pady=(12, 4))
+        ).pack(pady=(self.px(12), self.px(4)))
 
         # =========================
         # ① 多少分钟后关机
@@ -160,19 +306,21 @@ class ShutdownTimerApp:
             frame1,
             textvariable=self.minutes_var,
             values=[
+                "5",
                 "10",
+                "15",
                 "20",
                 "30",
-                "40",
-                "50",
+                "45",
                 "60",
+                "90",
                 "120"
             ],
             width=5,
             state="normal",
             font=("Microsoft YaHei", 10)
         )
-        minute_box.pack(side="left", padx=(0, 4))
+        minute_box.pack(side="left", padx=(0, self.px(4)))
 
         tk.Label(
             frame1,
@@ -191,6 +339,9 @@ class ShutdownTimerApp:
             padx=12
         ).pack(side="right")
 
+        # 输入完直接回车就能开始
+        minute_box.bind("<Return>", lambda _e: self.start_minutes())
+
         # =========================
         # ② 指定时间关机
         # =========================
@@ -203,24 +354,22 @@ class ShutdownTimerApp:
         )
 
         # =========================
-        # 小时
+        # 小时（点击下拉选择，也可直接输入）
         # =========================
         self.hour_var = tk.StringVar(
             value=default_time.strftime("%H")
         )
 
-        tk.Entry(
+        hour_box = ttk.Combobox(
             frame2,
             textvariable=self.hour_var,
-            width=4,
-            font=("Microsoft YaHei", 10),
-            justify="center",
-            relief="solid",
-            bd=1
-        ).pack(
-            side="left",
-            padx=(0, 2)
+            values=[f"{h:02d}" for h in range(24)],
+            width=3,
+            state="normal",
+            height=10,
+            font=("Microsoft YaHei", 10)
         )
+        hour_box.pack(side="left", padx=(0, self.px(2)))
 
         tk.Label(
             frame2,
@@ -230,28 +379,26 @@ class ShutdownTimerApp:
             fg=self.TEXT
         ).pack(
             side="left",
-            padx=(0, 6)
+            padx=(0, self.px(6))
         )
 
         # =========================
-        # 分钟
+        # 分钟（点击下拉选择，也可直接输入）
         # =========================
         self.minute_var = tk.StringVar(
             value=default_time.strftime("%M")
         )
 
-        tk.Entry(
+        minute_box = ttk.Combobox(
             frame2,
             textvariable=self.minute_var,
-            width=4,
-            font=("Microsoft YaHei", 10),
-            justify="center",
-            relief="solid",
-            bd=1
-        ).pack(
-            side="left",
-            padx=(0, 2)
+            values=[f"{m:02d}" for m in range(60)],
+            width=3,
+            state="normal",
+            height=10,
+            font=("Microsoft YaHei", 10)
         )
+        minute_box.pack(side="left", padx=(0, self.px(2)))
 
         tk.Label(
             frame2,
@@ -275,11 +422,15 @@ class ShutdownTimerApp:
             side="right"
         )
 
+        # 输入完直接回车就能开始
+        hour_box.bind("<Return>", lambda _e: self.start_specific_time())
+        minute_box.bind("<Return>", lambda _e: self.start_specific_time())
+
         # =========================
         # 当前状态
         # =========================
         status_frame = tk.Frame(root, bg=self.BG)
-        status_frame.pack(pady=(6, 0))
+        status_frame.pack(pady=(self.px(6), 0))
 
         tk.Label(
             status_frame,
@@ -306,7 +457,7 @@ class ShutdownTimerApp:
             text="--:--:--",
             font=("Consolas", 22, "bold"),
             bg=self.BG,
-            fg=self.TEXT
+            fg=self.SUBTEXT
         )
         self.countdown_label.pack()
 
@@ -314,19 +465,17 @@ class ShutdownTimerApp:
         # 操作按钮
         # =========================
         button_frame = tk.Frame(root, bg=self.BG)
-        button_frame.pack(pady=(6, 4))
+        button_frame.pack(pady=(self.px(6), self.px(4)))
 
-        self.flat_button(
+        self.cancel_btn = self.flat_button(
             button_frame,
             "取消关机",
             self.cancel_shutdown,
             self.DANGER,
             self.DANGER_HOVER,
             wide=True
-        ).pack(
-            side="left",
-            padx=5
         )
+        self.cancel_btn.pack(side="left", padx=self.px(5))
 
         self.flat_button(
             button_frame,
@@ -337,8 +486,11 @@ class ShutdownTimerApp:
             wide=True
         ).pack(
             side="left",
-            padx=5
+            padx=self.px(5)
         )
+
+        # 没有任务时取消按钮置灰，避免误点后误显示"已取消关机"
+        self.set_cancel_enabled(False)
 
         # =========================
         # 底部提示
@@ -351,8 +503,14 @@ class ShutdownTimerApp:
             fg=self.SUBTEXT
         ).pack(
             side="bottom",
-            pady=(0, 6)
+            pady=(0, self.px(6))
         )
+
+        # =========================
+        # 点右上角 X 也走"退出程序"：
+        # 只退出界面，不取消已设置的系统关机
+        # =========================
+        self.root.protocol("WM_DELETE_WINDOW", self.close_program)
 
         # =========================
         # 启动时恢复之前的任务
@@ -363,6 +521,9 @@ class ShutdownTimerApp:
         # 打开时窗口居中
         # =========================
         self.center_window()
+
+        # 位置已就位，显示窗口
+        root.deiconify()
 
     # ==================================================
     # 保存任务
@@ -541,6 +702,12 @@ class ShutdownTimerApp:
                 (target - now).total_seconds()
             )
 
+            # 重新下发前必须先取消系统里仍挂着的旧关机命令：
+            # 退出程序时不取消系统关机（设计如此），
+            # 若直接再下发，系统会报"已有计划关机"(错误 1190)，
+            # 恢复就会被当成失败，任务误删、界面不回显
+            self.cancel_system_shutdown()
+
             if not self.execute_shutdown(
                 remaining
             ):
@@ -553,18 +720,20 @@ class ShutdownTimerApp:
                     "错误",
                     "设置关机失败，之前保存的任务已丢弃。\n\n"
                     "如果系统策略（组策略）禁止通过命令行关机，"
-                    "则本功能无法使用。"
+                    "则本功能无法使用。",
+                    parent=self.root
                 )
 
                 return
 
-            # =========================
-            # 这里只显示时间，不显示日期
-            # =========================
+            self.set_cancel_enabled(True)
+
             self.status_label.config(
-                text=f"{target.strftime('%H:%M')} 关机",
+                text=self.describe_target(target),
                 fg=self.OK_RED
             )
+
+            self.countdown_label.config(fg=self.OK_RED)
 
             # 恢复倒计时
             self.update_countdown()
@@ -632,20 +801,20 @@ class ShutdownTimerApp:
     # ==================================================
     def start_minutes(self):
 
+        text = self.minutes_var.get().strip()
+
         try:
-
-            minutes = int(
-                self.minutes_var.get()
-            )
-
-            if minutes <= 0:
-                raise ValueError
-
+            minutes = int(text)
         except ValueError:
+            minutes = 0
+
+        # 上限与系统 shutdown /t 实测可用的 30 天对齐，超出时命令会失败
+        if minutes <= 0 or minutes * 60 > self.SHUTDOWN_MAX_SECONDS:
 
             messagebox.showwarning(
                 "输入错误",
-                "请输入正确的分钟数，例如：10、30、60、120"
+                "请输入正确的分钟数（1 - 43200，即 30 天以内），\n例如：10、30、60、120",
+                parent=self.root
             )
 
             return
@@ -676,7 +845,8 @@ class ShutdownTimerApp:
                 "错误",
                 "设置关机失败。\n\n"
                 "如果系统策略（组策略）禁止通过命令行关机，"
-                "则本功能无法使用。"
+                "则本功能无法使用。",
+                parent=self.root
             )
 
             return
@@ -685,10 +855,14 @@ class ShutdownTimerApp:
         self.save_task()
 
         # 更新状态
+        self.set_cancel_enabled(True)
+
         self.status_label.config(
-            text=f"{minutes} 分钟后关机",
+            text=self.describe_target(self.target_time),
             fg=self.OK_RED
         )
+
+        self.countdown_label.config(fg=self.OK_RED)
 
         # 开始倒计时
         self.update_countdown()
@@ -719,7 +893,8 @@ class ShutdownTimerApp:
                 "时间格式错误",
                 "请输入正确的时间：\n\n"
                 "小时：0 - 23\n"
-                "分钟：0 - 59"
+                "分钟：0 - 59",
+                parent=self.root
             )
 
             return
@@ -767,7 +942,8 @@ class ShutdownTimerApp:
                 "错误",
                 "设置关机失败。\n\n"
                 "如果系统策略（组策略）禁止通过命令行关机，"
-                "则本功能无法使用。"
+                "则本功能无法使用。",
+                parent=self.root
             )
 
             return
@@ -775,13 +951,14 @@ class ShutdownTimerApp:
         # 保存任务
         self.save_task()
 
-        # =========================
-        # 这里只显示时间，不显示日期
-        # =========================
+        self.set_cancel_enabled(True)
+
         self.status_label.config(
-            text=f"{target.strftime('%H:%M')} 关机",
+            text=self.describe_target(target),
             fg=self.OK_RED
         )
+
+        self.countdown_label.config(fg=self.OK_RED)
 
         # 开始倒计时
         self.update_countdown()
@@ -842,6 +1019,8 @@ class ShutdownTimerApp:
             # 删除保存的任务
             self.delete_saved_task()
 
+            self.set_cancel_enabled(False)
+
             # 兜底关机：正常路径在开始时已下发过系统命令，
             # 但如果重启后系统里已没有该命令，就必须在这里
             # 直接补发立即关机，保证电脑到点真的会关
@@ -855,23 +1034,19 @@ class ShutdownTimerApp:
 
             return
 
-        # 计算小时
-        hours = total_seconds // 3600
+        # 超过 24 小时先显示天数，避免出现 100:00:00 这种时长
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
 
-        # 计算分钟
-        minutes = (
-            total_seconds % 3600
-        ) // 60
-
-        # 计算秒
-        seconds = (
-            total_seconds % 60
-        )
+        if days > 0:
+            text = f"{days}天 {hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            text = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
         # 显示倒计时
-        self.countdown_label.config(
-            text=f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        )
+        self.countdown_label.config(text=text)
 
         # 每秒刷新
         self.shutdown_timer = self.root.after(
@@ -883,6 +1058,8 @@ class ShutdownTimerApp:
     # 取消关机
     # ==================================================
     def cancel_shutdown(self):
+
+        was_running = self.running
 
         # 取消 Windows 关机
         self.cancel_system_shutdown()
@@ -896,13 +1073,16 @@ class ShutdownTimerApp:
         self.delete_saved_task()
 
         # 更新界面
+        self.set_cancel_enabled(False)
+
         self.status_label.config(
-            text="已取消关机",
+            text="已取消关机" if was_running else "未设置关机",
             fg=self.OK_GREEN
         )
 
         self.countdown_label.config(
-            text="--:--:--"
+            text="--:--:--",
+            fg=self.SUBTEXT
         )
 
     # ==================================================
@@ -925,6 +1105,21 @@ class ShutdownTimerApp:
 # ======================================================
 
 if __name__ == "__main__":
+
+    enable_windows_dpi_awareness()
+
+    # 已有实例在运行就不再开第二个窗口，
+    # 避免两个倒计时互相覆盖、旧实例到点重复触发关机
+    if another_instance_running():
+
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "定时关机工具已经在运行了，请使用已打开的窗口。",
+            "提示",
+            0x00000040  # MB_ICONINFORMATION
+        )
+
+        sys.exit(0)
 
     root = tk.Tk()
 

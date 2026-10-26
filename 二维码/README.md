@@ -2,7 +2,7 @@
 
 打包
 ```bash
-pyinstaller --noconfirm -F -w --name "二维码工具" --distpath . --collect-all pyzbar qr_gui.pyw
+pyinstaller --noconfirm -F -w --name "二维码工具" --icon qr_icon.ico --distpath . --collect-all pyzbar qr_gui.pyw
 
 ```
  
