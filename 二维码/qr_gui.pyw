@@ -190,26 +190,41 @@ class QRApp:
             pass
 
         if utf8_str is not None:
-            # 若 UTF-8 解出来像乱码，尝试两种 mojibake 修复
+            # bugfix: zbar 有时把 UTF-8 字节按 Shift_JIS 解释后重新编码返回,
+            # 中文识别成生僻汉字+半角假名(如 "二维码工具" -> "莠檎ｻｴ遐∝…"),
+            # 且表面汉字占比正常, 不触发 _is_mojibake。
+            # 反向修复: 按 cp932 重新编码, 若能严格读回 UTF-8 且中文占比更高则采用
+            try:
+                sjis_fixed = utf8_str.encode("cp932").decode("utf-8")
+                # 半角假名(U+FF61-FF9F)是 SJIS 误读的强特征, 用于修复
+                # 纯字母/数字内容(如 é -> ﾃｩ)这类汉字占比不变的乱码
+                has_hankana = any("\uff61" <= ch <= "\uff9f" for ch in utf8_str)
+                if (sjis_fixed != utf8_str
+                        and (QRApp._cjk_ratio(sjis_fixed) > QRApp._cjk_ratio(utf8_str)
+                             or (has_hankana and "\ufffd" not in sjis_fixed))):
+                    return sjis_fixed
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+            # 若 UTF-8 解出来像乱码，尝试 mojibake 修复
             if QRApp._is_mojibake(utf8_str):
-                candidates = []
-                # latin-1 方向
+                # latin/cp1252 双层编码方向：能重新读回 UTF-8 基本即可信
+                # (纯 ASCII 不会进这里；正常带重音符号的文本读不回 UTF-8)
+                for codec in ("cp1252", "latin-1"):
+                    try:
+                        latin_fixed = utf8_str.encode(codec, "ignore").decode("utf-8")
+                        if latin_fixed:
+                            return latin_fixed
+                    except (UnicodeEncodeError, UnicodeDecodeError):
+                        continue
+                # gbk 方向：修复结果汉字占比明显更高才采用
                 try:
-                    candidates.append(utf8_str.encode("latin-1").decode("utf-8"))
+                    gbk_fixed = utf8_str.encode("gbk", "ignore").decode("utf-8", "ignore")
+                    if (gbk_fixed and "\ufffd" not in gbk_fixed
+                            and QRApp._cjk_ratio(gbk_fixed)
+                            > QRApp._cjk_ratio(utf8_str) + 0.1):
+                        return gbk_fixed
                 except (UnicodeEncodeError, UnicodeDecodeError):
                     pass
-                # gbk 方向
-                try:
-                    candidates.append(utf8_str.encode("gbk").decode("utf-8"))
-                except (UnicodeEncodeError, UnicodeDecodeError):
-                    pass
-                # 选「汉字占比最高」且无替换符的
-                candidates = [c for c in candidates if "\ufffd" not in c]
-                if candidates:
-                    best = max(candidates, key=QRApp._cjk_ratio)
-                    # 修复结果明显更"正常"才采用
-                    if QRApp._cjk_ratio(best) > QRApp._cjk_ratio(utf8_str) + 0.1:
-                        return best
 
             if "\ufffd" not in utf8_str:
                 return utf8_str
@@ -231,12 +246,13 @@ class QRApp:
     def _build_ui(self):
         body = ttk.Frame(self.root)
         body.pack(fill="both", expand=True, padx=10, pady=8)
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
+        # 左右两列等宽（硬性要求：minsize 固定 + 面板 sticky="nsew"）
+        body.columnconfigure(0, weight=1, minsize=345)
+        body.columnconfigure(1, weight=1, minsize=345)
 
         # ========== 左列：链接 -> 二维码 ==========
         gbox = ttk.LabelFrame(body, text=" 转换为二维码 ")
-        gbox.grid(row=0, column=0, sticky="n", padx=(0, 6))
+        gbox.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
         row1 = ttk.Frame(gbox)
         row1.pack(fill="x", padx=8, pady=(8, 4))
@@ -261,7 +277,7 @@ class QRApp:
 
         # ========== 右列：二维码 -> 链接 ==========
         dbox = ttk.LabelFrame(body, text=" 二维码识别 ")
-        dbox.grid(row=0, column=1, sticky="n", padx=(6, 0))
+        dbox.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         row3 = ttk.Frame(dbox)
         row3.pack(fill="x", padx=8, pady=(8, 4))
@@ -272,7 +288,8 @@ class QRApp:
         ttk.Label(row3, textvariable=self.src_name_var, foreground="#666",
                   width=18, anchor="w").pack(side="left", padx=(6, 0))
 
-        self.src_frame = tk.Frame(dbox, width=270, height=275,
+        # bugfix: 与左侧 qr_frame 严格同尺寸(统一用 PREVIEW_SIZE), 避免两预览框大小不一致
+        self.src_frame = tk.Frame(dbox, width=PREVIEW_SIZE, height=PREVIEW_SIZE,
                                   bg="white", relief="groove", bd=1)
         self.src_frame.pack(pady=(8, 6))
         self.src_frame.pack_propagate(False)
@@ -333,18 +350,28 @@ class QRApp:
         self.decode(img)
 
     def paste_image(self):
-        img = ImageGrab.grabclipboard()
-        if img is None:
+        try:
+            clip = ImageGrab.grabclipboard()
+        except Exception as e:
+            messagebox.showerror("剪贴板不可用", str(e))
+            return
+        if clip is None:
             messagebox.showwarning("提示", "剪贴板中没有图片，请先复制图片（如Win+Shift+S）")
             return
-        if isinstance(img, list):
+        if isinstance(clip, str):
+            # 剪贴板里是文本：直接填入左侧输入框并生成二维码
+            self.link_var.set(clip.strip())
+            self._do_gen_qr(clip.strip(), verbose=False)
+            self.set_status("已从剪贴板粘贴文本并生成二维码")
+            return
+        if isinstance(clip, list):
             try:
-                img = Image.open(img[0]).convert("RGB")
+                img = Image.open(clip[0]).convert("RGB")
             except Exception as e:
                 messagebox.showerror("打开失败", str(e))
                 return
         else:
-            img = img.convert("RGB")
+            img = clip.convert("RGB")
         self.src_name_var.set("剪贴板图片")
         self.decode(img)
 
@@ -357,11 +384,11 @@ class QRApp:
 
         try:
             img = Image.open(path).convert("RGB")
-            self.src_name_var.set(os.path.basename(path))
-            self.decode(img)
-            self.set_status(f"拖入解析：{os.path.basename(path)}")
-        except Exception as e:
-            messagebox.showerror("解析失败", f"无法解析拖入的文件：{e}")
+        except Exception:
+            self.set_status(f"拖入的不是可解析的图片：{os.path.basename(path)}")
+            return
+        self.src_name_var.set(os.path.basename(path))
+        self.decode(img)  # 识别结果状态放在后面，不被“拖入解析”覆盖
 
     def open_link(self):
         if not self.last_link:
