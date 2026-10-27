@@ -59,15 +59,6 @@
         <b style="font-size:14px">账号管理</b>
         <span class="hint" style="margin:0">当前使用：<b id="curAcct" style="color:#111">—</b></span>
         <span style="flex:1"></span>
-        <button class="mini" onclick="toggleAddAcct()">＋ 添加账号</button>
-      </div>
-      <div id="addAcctBox" style="display:none;margin-top:8px">
-        <div class="row" style="margin:0;align-items:flex-end">
-          <label class="f" style="flex:2">账号备注名（只在本机用来区分，随便起）<input id="newAcctName" placeholder="例如：主号 / 二号店" onkeydown="if(event.key==='Enter')addAcct()"></label>
-          <button class="save" onclick="addAcct()">创建并切换</button>
-          <button onclick="toggleAddAcct()">取消</button>
-        </div>
-        <div class="hint" style="margin:6px 0 0">创建后会自动切换到这个账号；接着双击「启动自动发货.bat」，在弹出的浏览器里扫码登录该号即可。</div>
       </div>
       <div id="acctRows"></div>
       <div class="hint" style="margin:8px 0 0">每个账号有独立的登录档案：首次在「启动自动发货.bat」弹出的窗口里扫码登录一次，之后<b>下次启动会自动登录（免扫码）</b>。点「切换」后重新启动自动发货，打开的就是切换后的账号。商品与发货内容目前为所有账号共用。<b>删除账号会彻底删除该账号的登录档案（不可恢复）</b>。</div>
@@ -166,18 +157,20 @@ function renderAccounts(){
   const box = document.getElementById('acctRows');
   const accts = (state && state.accounts) || {current:'', items:[]};
   const curItem = (accts.items||[]).find(x=>x.name===accts.current);
-  document.getElementById('curAcct').textContent =
-    accts.current ? ((curItem && curItem.nick) ? curItem.nick + '（' + accts.current + '）' : accts.current)
-                  : '（还没有账号）';
+  document.getElementById('curAcct').textContent = !accts.current
+    ? '（还没有账号）'
+    : ((curItem && curItem.nick)
+        ? (curItem.nick === accts.current ? curItem.nick : curItem.nick + '（' + accts.current + '）')
+        : accts.current);
   if(!(accts.items||[]).length){
-    box.innerHTML = '<div class="hint" style="margin-top:8px">还没有账号。点右上角「＋ 添加账号」新建一个，再启动自动发货扫码登录。</div>';
+    box.innerHTML = '<div class="hint" style="margin-top:8px">还没有账号。双击「启动自动发货.bat」扫码登录一次，登录成功的账号会自动出现在这里。</div>';
     return;
   }
   box.innerHTML = accts.items.map((it,i)=>{
     const active = it.name === accts.current;
     const title = it.nick || it.name;
     const logged = !!(it.nick || it.uid);
-    const sub = [it.nick ? '备注：' + it.name : '',
+    const sub = [(it.nick && it.nick !== it.name) ? '备注：' + it.name : '',
                  it.uid ? 'ID ' + it.uid : '',
                  it.last_login ? '上次登录 ' + it.last_login : '',
                  it.dir].filter(Boolean).join(' · ');
@@ -191,17 +184,10 @@ function renderAccounts(){
       ${login}
       <span style="flex:1"></span>
       <button class="mini" onclick="renameAcct(${i})">改名</button>
-      <button class="mini" onclick="identifyAcct(${i})">识别账号</button>
       ${active ? '' : `<button class="mini" onclick="switchAcct(${i})">切换</button>`}
       <button class="del" onclick="delAcct(${i})">删除</button>
     </div>`;
   }).join('');
-}
-function toggleAddAcct(){
-  const b = document.getElementById('addAcctBox');
-  const show = (b.style.display === 'none');
-  b.style.display = show ? 'block' : 'none';
-  if(show) document.getElementById('newAcctName').focus();
 }
 async function acctAction(payload){
   const r = await (await fetch('/api/account',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
@@ -209,15 +195,6 @@ async function acctAction(payload){
   await load();
   toast(r.message || '已完成 ✔');
   return true;
-}
-async function addAcct(){
-  const el = document.getElementById('newAcctName');
-  const name = (el.value||'').trim();
-  if(!name){ toast('请先填写账号备注名', false); el.focus(); return; }
-  if(await acctAction({action:'add', name})){
-    el.value = '';
-    document.getElementById('addAcctBox').style.display = 'none';
-  }
 }
 async function switchAcct(i){
   const it = ((state.accounts||{}).items||[])[i];
@@ -233,14 +210,6 @@ async function renameAcct(i){
   if(!name || name === it.name) return;        // 没改或改成空
   await acctAction({action:'rename', name: it.name, new_name: name});
 }
-async function identifyAcct(i){
-  const it = ((state.accounts||{}).items||[])[i];
-  if(!it) return;
-  const m = document.getElementById('msg');
-  m.textContent = '正在读取该账号的登录信息（约 5~20 秒）…';
-  m.style.color = '#8a6d00';
-  await acctAction({action:'identify', name: it.name});
-}
 async function delAcct(i){
   const it = ((state.accounts||{}).items||[])[i];
   if(!it) return;
@@ -250,7 +219,7 @@ async function delAcct(i){
   if(it.name === accts.current){
     extra = others.length
       ? '\n\n这是当前使用的账号，删除后会自动切换到「' + (others[0].nick || others[0].name) + '」。'
-      : '\n\n这是当前唯一的账号，删除后将没有可用账号（重新添加并扫码登录即可）。';
+      : '\n\n这是当前唯一的账号，删除后将没有可用账号（下次启动自动发货扫码登录即可）。';
   }
   if(!confirm('删除账号「' + (it.nick || it.name) + '」？' + extra + '\n\n⚠ 该账号的登录档案会被彻底删除，无法恢复（商品与发货内容不受影响）。')) return;
   await acctAction({action:'delete', name: it.name});
