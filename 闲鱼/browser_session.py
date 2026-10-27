@@ -15,7 +15,7 @@ LOGS_DIR = BASE / "logs"
 class BrowserSession:
     def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.user_data_dir = str((BASE / cfg.get("user_data_dir", "browser_data")).resolve())
+        self.user_data_dir = str((BASE / (cfg.get("user_data_dir") or "browser_data")).resolve())
         self.pw = None
         self.ctx = None
         self.page = None
@@ -101,6 +101,29 @@ class BrowserSession:
         except Exception:
             pass
         return ""
+
+    def self_identity(self) -> dict:
+        """读 cookie 得到当前登录账号的昵称/用户ID（用于账号管理页显示真实账号）。"""
+        from urllib.parse import unquote
+        out = {"uid": "", "nick": ""}
+        try:
+            cookies = {c.get("name"): str(c.get("value") or "") for c in self.ctx.cookies()}
+        except Exception:
+            return out
+        out["uid"] = cookies.get("unb", "").strip()
+        for k in ("_nk_", "tracknick", "lgc"):   # 淘宝/闲鱼的昵称类 cookie
+            v = (cookies.get(k) or "").strip().strip('"')
+            if not v:
+                continue
+            try:
+                v = unquote(v)
+            except Exception:
+                pass
+            v = v.strip()
+            if v and not v.isdigit():
+                out["nick"] = v
+                break
+        return out
 
 
 def _probe(page, sel: str) -> int:

@@ -11,7 +11,7 @@ import re
 import time
 from pathlib import Path
 
-from stores import content_of, load_settings_and_products, log_used_card
+from stores import content_of, load_settings_and_products, log_used_card, save_account_identity
 
 BASE = Path(__file__).resolve().parent
 LOGS_DIR = BASE / "logs"
@@ -40,6 +40,7 @@ class AutoDeliverer:
         self.session.open_im()
         self.self_id = self.session.self_user_id()
         self.log.info(f"本机用户ID(unb) = {self.self_id or '未知'}")
+        self.remember_account()
         if self.cfg.get("listen_ws_frames", True):
             self.attach_ws()
         try:
@@ -63,6 +64,26 @@ class AutoDeliverer:
                     return
                 self.log.error(f"轮询异常: {e}")
             time.sleep(interval + random.uniform(0, 3))
+
+    def remember_account(self):
+        """把当前登录的真实闲鱼账号（昵称/ID）写进账号管理，页面就能看到是哪个号。
+
+        即使账号列表被清空、或当前账号没设置，也会按实际使用的登录档案自动登记一个，
+        避免"扫码登录了但账号管理里什么都没有"。
+        """
+        account = str(self.cfg.get("current_account") or "").strip()
+        try:
+            ident = self.session.self_identity()
+        except Exception:
+            ident = {}
+        uid = str(ident.get("uid") or self.self_id or "")
+        nick = str(ident.get("nick") or "")
+        if not (uid or nick):
+            self.log.warning("还没读到登录信息（可能尚未登录）；扫码登录成功后会自动登记到账号管理")
+            return
+        self.log.info(f"当前登录账号：{nick or '(未取到昵称)'}（ID {uid or '未知'}）")
+        if save_account_identity(account, uid, nick):
+            self.log.info("账号信息已写入账号管理（商品管理页「账号管理」里可以看到/改名/切换）")
 
     # ---------------- 选择器工具 ----------------
     def find_first(self, names):

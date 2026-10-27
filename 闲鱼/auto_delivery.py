@@ -80,7 +80,7 @@ def cmd_run(cfg: dict, selectors: dict):
     bs = get_browser_session_class()(cfg)
     bs.launch()
     from app import AutoDeliverer
-    deliverer = AutoDeliverer(bs, cfg, selectors, DeliveredStore(), log)
+    deliverer = AutoDeliverer(bs, cfg, selectors, DeliveredStore(account=cfg.get("current_account") or ""), log)
     try:
         deliverer.start()
     except KeyboardInterrupt:
@@ -107,7 +107,7 @@ def cmd_send_test(cfg: dict, selectors: dict, search: str, text: str):
         bs.open_im()
         bs.ensure_login()
         from app import AutoDeliverer
-        d = AutoDeliverer(bs, cfg, selectors, DeliveredStore(), log)
+        d = AutoDeliverer(bs, cfg, selectors, DeliveredStore(account=cfg.get("current_account") or ""), log)
         row = d.find_row_by_text(search)
         if row is None:
             log.error(f"会话列表里没找到包含『{search}』的会话")

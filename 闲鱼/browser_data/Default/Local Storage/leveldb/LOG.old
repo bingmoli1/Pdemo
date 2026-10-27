@@ -1,3 +1,8 @@
-2026/10/27-11:17:15.692 3ebc Reusing MANIFEST D:\Pdemo\闲鱼\browser_data\Default\Local Storage\leveldb/MANIFEST-000001
-2026/10/27-11:17:15.693 3ebc Recovering log #8
-2026/10/27-11:17:15.697 3ebc Reusing old log D:\Pdemo\闲鱼\browser_data\Default\Local Storage\leveldb/000008.log 
+2026/10/27-20:20:48.300 4960 Creating DB D:\Pdemo\闲鱼\browser_data\Default\Local Storage\leveldb since it was missing.
+2026/10/27-20:20:49.144 4960 Reusing MANIFEST D:\Pdemo\闲鱼\browser_data\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/27-20:20:57.504 4094 Level-0 table #5: started
+2026/10/27-20:20:57.560 4094 Level-0 table #5: 170372 bytes OK
+2026/10/27-20:20:57.635 4094 Delete type=0 #3
+2026/10/27-20:21:22.075 4094 Level-0 table #7: started
+2026/10/27-20:21:22.518 4094 Level-0 table #7: 102791 bytes OK
+2026/10/27-20:21:22.652 4094 Delete type=0 #4

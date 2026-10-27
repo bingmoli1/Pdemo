@@ -51,5 +51,15 @@
       "[class*='notice']:has-text('买家已付款')",
       "[class*='tip']:has-text('买家已付款')"
     ]
-  }
+  },
+  "current_account": "xy867433637524",
+  "accounts": [
+    {
+      "name": "xy867433637524",
+      "dir": "browser_data",
+      "uid": "2214090283006",
+      "nick": "xy867433637524",
+      "last_login": "2026-10-27 20:21:38"
+    }
+  ]
 }

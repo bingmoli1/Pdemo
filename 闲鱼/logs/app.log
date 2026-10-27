@@ -75,3 +75,52 @@
 2026-10-27 18:37:01,807 INFO 本机用户ID(unb) = 2214090283006
 2026-10-27 18:37:01,828 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
 2026-10-27 18:37:01,829 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 19:34:17,073 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 19:34:17,074 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 19:34:17,074 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 19:34:27,961 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 19:34:27,961 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 19:34:27,962 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 19:42:15,075 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 19:42:15,076 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 19:42:15,076 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 19:42:50,127 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:00:38,570 INFO 本机用户ID(unb) = 未知
+2026-10-27 20:00:38,572 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 20:00:38,573 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 20:00:38,584 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:00:56,122 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:01:11,333 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:01:27,238 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:01:32,026 INFO 本机用户ID(unb) = 未知
+2026-10-27 20:01:32,030 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 20:01:32,031 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 20:01:32,043 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:01:44,734 INFO 浏览器已关闭，自动发货程序退出。
+2026-10-27 20:01:49,077 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:02:04,325 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:02:20,119 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:15:22,474 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 20:15:22,477 INFO 当前登录账号：xy867433637524（ID 2214090283006）
+2026-10-27 20:15:22,477 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 20:15:22,478 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 20:15:43,177 INFO 本机用户ID(unb) = 未知
+2026-10-27 20:15:43,180 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 20:15:43,181 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 20:15:43,191 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:16:00,353 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:16:16,761 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:16:32,370 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:20:56,278 INFO 本机用户ID(unb) = 未知
+2026-10-27 20:20:56,281 WARNING 还没读到登录信息（可能尚未登录）；扫码登录成功后会自动登记到账号管理
+2026-10-27 20:20:56,281 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 20:20:56,281 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 20:20:56,293 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:21:13,359 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:21:31,310 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 20:21:38,095 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 20:21:38,098 INFO 当前登录账号：xy867433637524（ID 2214090283006）
+2026-10-27 20:21:38,100 INFO 账号信息已写入账号管理（商品管理页「账号管理」里可以看到/改名/切换）
+2026-10-27 20:21:38,100 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 20:21:38,100 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 20:21:48,133 INFO 浏览器已关闭，自动发货程序退出。
