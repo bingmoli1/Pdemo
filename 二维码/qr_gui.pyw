@@ -736,13 +736,19 @@ class QRApp:
             messagebox.showerror("剪贴板不可用", str(e))
             return
         if clip is None:
-            messagebox.showwarning("提示", "剪贴板中没有图片，请先复制图片（如Win+Shift+S）")
-            return
-        if isinstance(clip, str):
-            # 剪贴板里是文本：直接填入左侧输入框并生成二维码
-            self.link_var.set(clip.strip())
-            self._do_gen_qr(clip.strip(), verbose=False)
-            self.set_status("已从剪贴板粘贴文本并生成二维码", "ok")
+            # PIL 的 grabclipboard 不支持文本格式(文本时返回 None)，
+            # 回退用 tkinter 读取文本：填入左侧输入框并生成二维码
+            try:
+                text = self.root.clipboard_get()
+            except tk.TclError:
+                text = ""
+            if text.strip():
+                self.link_var.set(text.strip())
+                self._do_gen_qr(text.strip(), verbose=False)
+                self.set_status("已从剪贴板粘贴文本并生成二维码", "ok")
+                return
+            messagebox.showwarning(
+                "提示", "剪贴板中没有图片或文本，请先复制图片（如Win+Shift+S）")
             return
         if isinstance(clip, list):
             try:

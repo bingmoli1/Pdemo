@@ -1,15 +1,15 @@
 {
   "products": [
     {
-      "name": "商品名字",
+      "name": "1",
       "match_keywords": [
-        "关键"
+        "2"
       ],
       "cards": [
-        "123"
+        "3"
       ],
       "enabled": true,
-      "reply_text": "感谢购买！您的卡密如下，请及时保存：\n{card}",
+      "reply_text": "所有网盘如下，请及时保存：\n{card}",
       "variant_rules": []
     }
   ]
