@@ -1,0 +1,1 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\Pdemo\\闲鱼\\accounts\\薄荷", "reason": "trash-failed", "detail": "[safe-delete] 操作失败: ERROR D:\\Pdemo\\闲鱼\\accounts\\薄荷: Error during a `trash` operation: Unknown { description: \"Some operations were aborted\" }"}
