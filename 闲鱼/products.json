@@ -1,0 +1,16 @@
+{
+  "products": [
+    {
+      "name": "商品名字",
+      "match_keywords": [
+        "商品名字"
+      ],
+      "cards": [
+        "2313123"
+      ],
+      "enabled": true,
+      "reply_text": "感谢购买！您的卡密如下，请及时保存：\n{card}",
+      "variant_rules": []
+    }
+  ]
+}

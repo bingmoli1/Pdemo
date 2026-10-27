@@ -1,0 +1,17 @@
+2026-10-27 02:02:29,006 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 02:02:29,006 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 02:02:29,006 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 02:03:49,883 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:06,331 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:21,709 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:37,353 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:54,802 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:12,159 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:27,283 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:44,688 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:59,720 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:06:15,449 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:06:32,093 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:06:48,987 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:07:04,581 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:07:21,551 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items

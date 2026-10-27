@@ -1,0 +1,71 @@
+2026-10-27 01:53:04,595 INFO 本机用户ID(unb) = 未知
+2026-10-27 01:53:04,596 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 01:53:04,596 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 01:53:04,622 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:53:20,770 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:53:37,858 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:53:54,549 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:54:59,663 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 01:54:59,663 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 01:54:59,664 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 01:54:59,686 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:55:15,130 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:55:32,384 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:55:48,632 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:56:04,487 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:56:20,872 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:56:38,866 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:56:55,314 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:57:13,218 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:57:29,067 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:57:45,684 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 01:58:02,186 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:02:29,006 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 02:02:29,006 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 02:02:29,006 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 02:03:49,883 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:06,331 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:21,709 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:37,353 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:04:54,802 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:12,159 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:27,283 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:44,688 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:05:59,720 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:06:15,449 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:06:32,093 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:06:48,987 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:07:04,581 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:07:21,551 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 02:08:42,169 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 02:08:42,170 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 02:08:42,170 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 02:09:11,133 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 02:09:11,133 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 02:09:11,133 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 02:12:36,343 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 02:12:36,344 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 02:12:36,345 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 02:12:36,554 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 selectors.json 的 conversation_items
+2026-10-27 03:09:53,351 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 03:09:53,351 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 03:09:53,351 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 请保持浏览器停留在「消息」页，按 Ctrl+C 停止。
+2026-10-27 03:10:59,945 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:11:15,203 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:11:33,167 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:11:49,213 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:12:05,793 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:17:30,085 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 03:17:30,085 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 03:17:30,085 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。
+2026-10-27 03:17:30,104 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:17:47,129 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:18:04,922 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:18:22,084 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:18:38,068 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:18:53,817 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:19:11,463 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:19:29,392 WARNING 未找到会话列表！请在浏览器里停留在「消息」页；若仍找不到，运行 python auto_delivery.py inspect 按报告修改 config.json 的 selectors.conversation_items
+2026-10-27 03:25:50,160 INFO 本机用户ID(unb) = 2214090283006
+2026-10-27 03:25:50,160 INFO 已附加 WebSocket 帧监听（未知帧会抽样记录到 logs/ws_frames.log，便于后续扩展解析）
+2026-10-27 03:25:50,160 INFO 开始监听：每 15s 轮询一次 | dry_run=True | 关闭浏览器窗口即停止程序，按 Ctrl+C 停止。

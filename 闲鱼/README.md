@@ -1,0 +1,96 @@
+# 闲鱼本地自动发货工具（Python 版）
+
+在**自己的电脑上**运行，监控闲鱼网页版（goofish.com）的消息，当买家拍下并付款后（买家说"已拍/已付款"，或聊天里出现"买家已付款"系统消息），自动从本地卡密库存里取出一个卡密发给买家。同一单只发一次。
+
+## 目录结构
+
+```
+D:\Pdemo\闲鱼\
+├── auto_delivery.py      入口（命令行工具）
+├── app.py                自动发货主逻辑（轮询、识别、发送、WS 监听）
+├── browser_session.py    浏览器持久化会话 + inspect 选择器检查
+├── stores.py             卡密库存 / 发货记录（本地文件存储）
+├── admin_server.py       商品管理网页服务（本机 127.0.0.1:8765）
+├── admin.html            商品管理网页页面
+├── 商品管理.bat          双击打开商品管理页面
+├── 启动自动发货.bat       双击启动监听
+├── 停止自动发货.bat       双击停止
+├── config.json           ★ 全局设置：触发词、页面选择器、轮询频率等
+├── products.json         ★ 商品与卡密内容（商品管理页面管理的就是它）
+├── data\                 运行时生成：已发货记录 delivered.json、已用卡密 used_cards.log
+├── logs\                 运行时生成：日志、inspect 报告与截图
+└── browser_data\         运行时生成：浏览器登录会话（扫码一次后免登录）
+```
+
+## 快速开始
+
+> **日常使用：双击 `启动自动发货.bat` 即可**（会弹出控制台窗口 + 浏览器窗口；停止用 `停止自动发货.bat` 或直接关掉控制台窗口）。下面的命令行方式和它效果相同。注意：浏览器登录 profile 同时只能被一个实例占用，启动前先确保没有另一个实例在跑。
+
+```bash
+# 1. 安装依赖（首次）
+pip install -r requirements.txt
+python -m playwright install chromium
+
+# 2. 首次登录：会弹出浏览器，用手机闲鱼/淘宝扫码，登录后自动保存会话
+python auto_delivery.py login
+
+# 3. 配置商品（两种方式任选）：
+#    a. 双击「商品管理.bat」，在网页里增删改商品/规格，卡密内容直接填在商品里（推荐）
+#    b. 手动改 config.json 的 products（卡密内容写在各商品的 cards 数组，一行一个）
+
+# 4. 先用演练模式跑（config.json 里 dry_run=true：只打印"命中发货"，不真发、不消耗卡密）
+python auto_delivery.py run
+
+# 5. 确认无误后，把 dry_run 改为 false，正式发货。保持浏览器窗口开着即可。
+```
+
+## 命令
+
+| 命令 | 作用 |
+|---|---|
+| `python auto_delivery.py login` | 打开浏览器扫码登录，保存会话 |
+| `python auto_delivery.py run` | 启动自动发货监听（Ctrl+C 停止） |
+| `python auto_delivery.py inspect` | 检查页面元素并生成报告 + 截图（校准 config.json 的 selectors 用） |
+| `python auto_delivery.py send-test --search 关键词 --text 内容` | 手动向指定会话发一条消息（真实发送，测试用） |
+| `python auto_delivery.py cards` | 查看各商品剩余卡密数量 |
+
+## 配置说明（config.json）
+
+- **商品管理页面**：双击 `商品管理.bat`，浏览器自动打开 `http://127.0.0.1:8765`（仅本机可访问）。可视化增删改商品：名字、认单关键词、**卡密内容（一行一个，直接填在商品里）**、发货话术、多规格（规格名+规格关键词+该规格的卡密内容），顶部可切换演练/正式模式。保存写回 `config.json`，**保存后重启自动发货生效**。
+- **卡密存储**：卡密内容存在 `products.json` 各商品的 `cards` 字段里（不再使用卡密文件）。发货成功自动从列表移除并记录到 `data\used_cards.log`；发送失败不消耗。旧版的 `cards\` 卡密文件和 config.json 里的旧商品配置，会在启动时自动迁移（原文件保留作备份）。
+- **认单规则**：买家付款后，程序在所有已启用商品里找与聊天面板商品标题**关键词重合最多**的一个发货（先比命中关键词个数，相同再比命中总字数）。
+- `trigger_keywords`：触发发货的关键词。当前**只保留了 `买家已付款`**——只有聊天里出现"买家已付款"系统消息（买家完成付款）才会发货；买家发"已拍""我付款了"等普通聊天不会触发。
+- `verify_system_notice`：默认 `false`。注意一个漏洞：如果买家**手动打字**"买家已付款"也会命中触发词。改为 `true` 后，发货前会进入聊天，按 `selectors.json` 里的 `system_notice_selectors` 查找"系统样式"的付款通知，找不到就不发。开启前请先用 `inspect` 确认选择器能命中，否则会一直跳过不发货。
+- **多规格商品**（如颜色 白色/黑色，且发不同内容）：在商品里加 `variant_rules`，每条规则配规格关键词和各自卡密文件：
+  ```json
+  {
+    "name": "手机壳",
+    "match_keywords": ["手机壳"],
+    "cards": ["默认卡密1", "默认卡密2"],
+    "variant_rules": [
+      {"name": "白色", "keywords": ["白色"], "cards": ["白色卡密1"]},
+      {"name": "黑色", "keywords": ["黑色"], "cards": ["黑色卡密1"]}
+    ],
+    "enabled": true,
+    "reply_text": "感谢购买！您的卡密如下，请及时保存：\n{card}"
+  }
+  ```
+  程序按"规格关键词在聊天面板文字中最后出现的位置"判断买家选的规格（订单里"已选：白色"在标题之后）；**多个规格挤在标题里分不清时会走默认卡密内容并在日志提示，绝不瞎猜**。规格不同但发同一种货的话，不需要配 `variant_rules`。
+- `products`：商品列表。`match_keywords` 用于在会话里匹配是哪个商品（通常是商品标题里的词）；`card_file` 指向卡密文件；`reply_text` 里的 `{card}` 会替换成实际卡密。
+- `dry_run`：`true` 时只演练不发货；确认流程没问题后改成 `false`。
+- `poll_interval_seconds`：轮询间隔；`send_delay_seconds`：发送前随机延迟（模拟人工，降低风控风险）。
+- `headless`：保持 `false`（有界面更稳也更不容易被风控）。
+- 其余参数一般不用动：`max_rows_per_poll`（每轮最多检查多少个会话）、`variant_gap_chars`（多规格"位置差"判定阈值，越大越保守）、`login_wait_seconds`（等扫码登录的时长）、`page_load_wait_ms`（页面加载等待）、`viewport`/`locale`/`timezone_id`（浏览器环境）、`send_delay_seconds`（发货前随机延迟范围，模拟人工）。
+
+## 重要说明
+
+1. **选择器可能需要一次性校准**：闲鱼网页改版后元素定位可能失效。运行 `python auto_delivery.py inspect`，打开 `logs\inspect_report.txt` 和截图，把报告里"命中 N 个"的选择器填回 `config.json` 的 `selectors` 部分即可，代码本身不用改。
+2. **去重**：按"买家+商品"记录在 `data\delivered.json`。测试阶段想重新触发，删掉里面对应条目即可。
+3. **补货**：往 `cards\对应商品.txt` 里追加新行即可；发送失败卡密会自动退回库存；每次出库都记录在 `data\used_cards.log`。
+4. **系统消息文案**：如果真实付款后工具没反应，可能是闲鱼的实际系统文案变了（比如"买家已付款，等待卖家发货"）。打开聊天确认实际文字，把它加进 `trigger_keywords`（也可翻看 `logs\ws_frames.log` 里的原始消息）。子串匹配即可，`买家已付款` 能同时命中带后缀的完整文案。
+5. **运行期间**浏览器要停在闲鱼"消息"页（工具会自动打开，正常情况不用管）。
+
+## 风险提示
+
+- 自动化操作闲鱼属于平台规则灰色地带，存在被风控、限制账号的可能。请保守使用：轮询别太密、发货延迟保留随机、单量不大时尽量人工确认。
+- 本工具仅用于自动回复/发货你自己店铺的商品，请勿用于任何违规交易。使用产生的账号风险自负。

@@ -1,0 +1,15 @@
+# 登录凭据与个人数据，不要提交
+profiles/
+sites.json
+
+# 早期版本生成的数据
+cookies.json
+cookies_storage.json
+browser_cookies.json
+advanced_cookies.json
+temp_cookies.db
+
+__pycache__/
+build/
+dist/
+*.spec

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>闲鱼自动发货 - 商品管理</title>
+<style>
+  body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f5f6f8;color:#222}
+  header{position:sticky;top:0;background:#ffe600;padding:12px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.15);z-index:5}
+  header h1{font-size:18px;margin:0}
+  main{max-width:960px;margin:16px auto;padding:0 12px 40px}
+  .card{background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:6px 0}
+  label.f{display:flex;flex-direction:column;font-size:12px;color:#666;flex:1;min-width:180px}
+  label.f input,label.f textarea{font-size:14px;padding:6px 8px;border:1px solid #ddd;border-radius:6px;margin-top:3px;font-family:inherit}
+  textarea{resize:vertical}
+  button{border:none;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px}
+  .save{background:#111;color:#ffe600;font-weight:bold}
+  .del{background:#fdecec;color:#c0392b;padding:4px 10px}
+  .edit{background:#eef2ff;color:#3b5bdb;padding:4px 10px}
+  .mini{padding:6px 12px;background:#eef2ff;color:#3b5bdb}
+  .badge{padding:4px 10px;border-radius:12px;font-size:12px}
+  .dry{background:#fff3bf;color:#8a6d00}
+  .live{background:#d3f9d8;color:#2b8a3e}
+  .on{background:#d3f9d8;color:#2b8a3e;padding:2px 8px;border-radius:10px;font-size:12px}
+  .off{background:#e9ecef;color:#868e96;padding:2px 8px;border-radius:10px;font-size:12px}
+  .low{color:#c0392b;font-weight:bold}
+  .hint{font-size:12px;color:#888;margin:2px 0 10px}
+  .variant{border:1px dashed #ddd;border-radius:8px;padding:8px;margin:6px 0}
+  h2{font-size:15px;margin:18px 0 8px}
+  #msg{font-size:13px;font-weight:bold;min-width:120px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eee;vertical-align:top}
+  th{font-size:12px;color:#888;background:#fafafa}
+  td .kw{color:#555;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>闲鱼自动发货 · 商品管理</h1>
+  <span id="mode" class="badge"></span>
+  <label style="font-size:13px"><input type="checkbox" id="dryrun" onchange="onDryRunToggle()"> 演练模式（不真实发货）</label>
+  <span id="msg"></span>
+</header>
+<main>
+  <!-- 列表视图 -->
+  <div id="listView">
+    <div class="row" style="align-items:center;margin-bottom:10px">
+      <button class="save" onclick="openForm(-1)">＋ 新增商品</button>
+      <button class="mini" onclick="toggleImport()">⬇ 批量导入</button>
+      <span class="hint" style="margin:0">认单规则：买家付款后，在所有已启用商品里找与聊天面板商品标题<b>关键词重合最多</b>的一个发货。</span>
+    </div>
+    <div class="card" id="importBox" style="display:none">
+      <b>批量导入商品</b>
+      <div class="hint">把闲鱼在售商品的标题粘贴到下面，<b>每行一个</b>；整行标题会作为认单关键词（之后可编辑改短）。导入后到各商品的「编辑」里填卡密内容。</div>
+      <textarea id="importText" rows="6" style="width:100%;box-sizing:border-box" placeholder="示例商品标题一&#10;示例商品标题二&#10;……"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" onclick="doImport()">导入这些标题</button>
+        <button class="del" onclick="document.getElementById('importBox').style.display='none'">收起</button>
+      </div>
+    </div>
+    <div class="card" style="padding:0;overflow:auto">
+      <table>
+        <thead><tr>
+          <th>商品</th><th>认单关键词</th><th>规格</th><th>状态</th><th>操作</th>
+        </tr></thead>
+        <tbody id="prodRows"></tbody>
+      </table>
+    </div>
+    <div class="hint">卡密内容在每件商品的「编辑」页里填写（一行一个）；保存后需重启「启动自动发货.bat」才生效。</div>
+  </div>
+
+  <!-- 编辑/新增 表单视图 -->
+  <div id="formView" style="display:none">
+    <div class="card">
+      <h2 id="formTitle" style="margin-top:0">新增商品</h2>
+      <div class="row">
+        <label class="f">商品名字（只是标签）<input id="f_name"></label>
+        <label class="f">认单关键词（多个用逗号隔开，须能在商品标题里找到）<input id="f_keywords" placeholder="例如：网盘会员年卡, 秒发"></label>
+      </div>
+      <div class="row">
+        <label class="f">卡密内容（一行一个：卡密/链接/兑换码都行。发货自动从第一行取出并移除）<textarea id="f_cards" rows="6" placeholder="CODE-0001-AAAA&#10;CODE-0002-BBBB&#10;……"></textarea></label>
+      </div>
+      <div class="row">
+        <label class="f">发货话术（{card} 会替换成卡密；\n 为换行）<textarea id="f_reply" rows="2"></textarea></label>
+        <label style="font-size:13px;padding-bottom:8px"><input type="checkbox" id="f_enabled"> 启用该商品</label>
+      </div>
+      <div><b style="font-size:13px">规格（可选；不同规格发不同内容时才需要配，每个规格有自己的卡密内容）</b></div>
+      <div id="rulesBox"></div>
+      <button class="mini" onclick="addRule()">＋ 添加规格</button>
+      <div class="row" style="margin-top:14px">
+        <button class="save" onclick="saveForm()">保存</button>
+        <button onclick="showList()">取消</button>
+        <span class="hint" style="margin:0">规格识别：程序按"规格关键词在聊天面板里最后出现的位置"判断；分不清时走上方默认卡密内容，不瞎猜。</span>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+let state = null;   // /api/state 返回的全部数据
+let draft = null;   // 正在编辑的商品副本
+let editIdx = -1;   // -1 = 新增
+
+async function load(){
+  state = await (await fetch('/api/state')).json();
+  document.getElementById('dryrun').checked = !!state.config.dry_run;
+  renderMode(); showList();
+}
+function renderMode(){
+  const m = document.getElementById('mode');
+  const dry = document.getElementById('dryrun').checked;
+  m.textContent = dry ? '演练模式：只记日志不发货' : '正式发货模式';
+  m.className = 'badge ' + (dry ? 'dry' : 'live');
+}
+async function onDryRunToggle(){
+  renderMode();
+  await postSave();
+  toast('模式已切换 ✔（重启自动发货程序后生效）');
+}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function toast(text, ok=true){
+  const msg = document.getElementById('msg');
+  msg.textContent = text;
+  msg.style.color = ok ? '#2b8a3e' : '#c0392b';
+  setTimeout(()=>{ msg.textContent=''; }, 6000);
+}
+async function postSave(){
+  const body = {
+    products: state.config.products,
+    dry_run: document.getElementById('dryrun').checked,
+  };
+  const r = await (await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(!r.ok){ toast('保存失败：' + (r.error||''), false); return false; }
+  return true;
+}
+
+/* ---------- 列表 ---------- */
+function showList(){
+  document.getElementById('formView').style.display = 'none';
+  document.getElementById('listView').style.display = 'block';
+  renderTable();
+}
+function renderTable(){
+  const tb = document.getElementById('prodRows');
+  tb.innerHTML = '';
+  const ps = state.config.products;
+  if(!ps.length){
+    tb.innerHTML = '<tr><td colspan="5" class="hint" style="padding:18px">还没有商品。点「＋ 新增商品」，或「⬇ 批量导入」粘贴在售商品标题。</td></tr>';
+    return;
+  }
+  ps.forEach((p,i)=>{
+    const tr = document.createElement('tr');
+    const kws = (p.match_keywords||[]).join('，');
+    const rules = p.variant_rules||[];
+    const ruleTxt = rules.length
+      ? rules.map(r => `<b>${esc(r.name || '未命名规格')}</b>`).join('<br>')
+      : '—';
+    tr.innerHTML = `
+      <td><b>${esc(p.name)}</b></td>
+      <td class="kw">${esc(kws)||'<span class="hint">未设置</span>'}</td>
+      <td class="kw">${ruleTxt}</td>
+      <td><span class="${p.enabled!==false?'on':'off'}">${p.enabled!==false?'启用':'停用'}</span></td>
+      <td style="white-space:nowrap">
+        <button class="edit" onclick="openForm(${i})">编辑</button>
+        <button class="del" onclick="delProduct(${i})">删除</button>
+      </td>`;
+    tb.appendChild(tr);
+  });
+}
+function toggleImport(){
+  const b = document.getElementById('importBox');
+  b.style.display = (b.style.display === 'none') ? 'block' : 'none';
+}
+async function doImport(){
+  const lines = document.getElementById('importText').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  if(!lines.length){ alert('请先把商品标题粘贴进文本框，每行一个'); return; }
+  lines.forEach(t=> state.config.products.push({
+    name: t, match_keywords: [t], cards: [], enabled: true,
+    reply_text: '感谢购买！您的卡密如下，请及时保存：\n{card}', variant_rules: []
+  }));
+  if(await postSave()){
+    document.getElementById('importText').value = '';
+    document.getElementById('importBox').style.display = 'none';
+    toast('已导入 ' + lines.length + ' 个商品，点「编辑」填卡密内容 ✔');
+    await load();
+  }
+}
+async function delProduct(i){
+  if(!confirm('确定删除商品「'+state.config.products[i].name+'」？')) return;
+  state.config.products.splice(i,1);
+  if(await postSave()){ toast('已删除 ✔'); await load(); }
+}
+
+/* ---------- 表单 ---------- */
+function openForm(i){
+  editIdx = i;
+  draft = i >= 0 ? JSON.parse(JSON.stringify(state.config.products[i]))
+                 : {name:'', match_keywords:[], cards:[], enabled:true,
+                    reply_text:'感谢购买！您的卡密如下，请及时保存：\n{card}', variant_rules:[]};
+  document.getElementById('formTitle').textContent = i >= 0 ? '编辑商品：' + (state.config.products[i].name||'') : '新增商品';
+  document.getElementById('f_name').value = draft.name || '';
+  document.getElementById('f_keywords').value = (draft.match_keywords||[]).join('，');
+  document.getElementById('f_cards').value = (draft.cards||[]).join('\n');
+  document.getElementById('f_enabled').checked = draft.enabled !== false;
+  document.getElementById('f_reply').value = draft.reply_text || '';
+  document.getElementById('listView').style.display = 'none';
+  document.getElementById('formView').style.display = 'block';
+  renderRules();
+  window.scrollTo(0, 0);
+}
+function renderRules(){
+  const box = document.getElementById('rulesBox');
+  box.innerHTML = '';
+  (draft.variant_rules||[]).forEach((r,j)=>{
+    const d = document.createElement('div');
+    d.className = 'variant';
+    d.innerHTML = `
+      <div class="row">
+        <label class="f">规格名<input value="${esc(r.name||'')}" oninput="draft.variant_rules[${j}].name=this.value"></label>
+        <label class="f">规格关键词（如：白色）<input value="${esc((r.keywords||[]).join('，'))}" oninput="draft.variant_rules[${j}].keywords=this.value.split(/[,，\\s]+/).filter(x=>x)"></label>
+      </div>
+      <div class="row">
+        <label class="f">该规格的卡密内容（一行一个，发货后自动移除）<textarea rows="3" oninput="draft.variant_rules[${j}].cards=this.value.split(/\\n+/).map(s=>s.trim()).filter(Boolean)">${esc((r.cards||[]).join('\n'))}</textarea></label>
+        <button class="del" onclick="draft.variant_rules.splice(${j},1);renderRules()">删除规格</button>
+      </div>`;
+    box.appendChild(d);
+  });
+  if(!(draft.variant_rules||[]).length) box.innerHTML = '<div class="hint">未配置规格。所有买家都发上方默认卡密内容。</div>';
+}
+function addRule(){
+  draft.variant_rules = draft.variant_rules || [];
+  draft.variant_rules.push({name:'', keywords:[], cards:[]});
+  renderRules();
+}
+function bindDraft(){
+  draft.name = document.getElementById('f_name').value.trim();
+  draft.match_keywords = document.getElementById('f_keywords').value.split(/[,，]+/).map(s=>s.trim()).filter(Boolean);
+  draft.cards = document.getElementById('f_cards').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  draft.enabled = document.getElementById('f_enabled').checked;
+  draft.reply_text = document.getElementById('f_reply').value;
+}
+async function saveForm(){
+  bindDraft();
+  if(!draft.name){ alert('请填写商品名字'); return; }
+  if(editIdx >= 0) state.config.products[editIdx] = draft;
+  else state.config.products.push(draft);
+  if(await postSave()){
+    toast('已保存 ✔（重启自动发货程序后生效）');
+    await load();
+  }
+}
+load();
+</script>
+</body>
+</html>

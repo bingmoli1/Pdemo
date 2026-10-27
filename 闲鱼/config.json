@@ -1,0 +1,55 @@
+{
+  "im_url": "https://www.goofish.com/im",
+  "orders_url": "",
+  "headless": false,
+  "user_data_dir": "browser_data",
+  "locale": "zh-CN",
+  "timezone_id": "Asia/Shanghai",
+  "viewport": {
+    "width": 1280,
+    "height": 850
+  },
+  "page_load_wait_ms": 3000,
+  "login_wait_seconds": 600,
+  "poll_interval_seconds": 15,
+  "max_rows_per_poll": 30,
+  "send_delay_seconds": [
+    3,
+    8
+  ],
+  "variant_gap_chars": 4,
+  "dry_run": true,
+  "listen_ws_frames": true,
+  "my_user_id": "",
+  "trigger_keywords": [
+    "买家已付款"
+  ],
+  "verify_system_notice": false,
+  "ignore_buyers": [
+    "通知消息"
+  ],
+  "selectors": {
+    "conversation_items": [
+      "div.ant-dropdown-trigger"
+    ],
+    "chat_input": [
+      "textarea"
+    ],
+    "send_button_text": [
+      "发 送",
+      "发送"
+    ],
+    "chat_panel": [
+      "main[class*='chat-main']",
+      "[class*='chat-container']"
+    ],
+    "chat_header_title": [
+      "[class*='chat-main'] [class*='header']"
+    ],
+    "system_notice_selectors": [
+      "[class*='system']:has-text('买家已付款')",
+      "[class*='notice']:has-text('买家已付款')",
+      "[class*='tip']:has-text('买家已付款')"
+    ]
+  }
+}
