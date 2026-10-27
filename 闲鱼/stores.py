@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""卡密库存与发货记录的本地存储。
+"""发货内容与发货记录的本地存储。
 
-卡密内容直接存在 config.json 各商品的 cards 字段里（一行一个）；
-发货后由发货引擎从 cards 移除并写回配置，同时记录到 data/used_cards.log。
+发货内容是一整段文本，直接存在 products.json 各商品的 cards 字段里；
+发货时把这段内容原样整段发给买家，**不做消耗、不删除**，同一商品可以反复使用。
+每次发货仍会记录到 data/used_cards.log（仅作记录）。
 """
 import json
 import os
@@ -31,6 +32,25 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+def content_of(value) -> str:
+    """把商品的 cards 字段统一成"一整段发货内容"字符串。
+
+    兼容三种来源：字符串（原样）、列表（旧版一行一个，用换行拼起来）、None。
+    只去掉首尾空行和每行尾部空格，保留中间的换行与缩进，方便发多行内容。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        text = "\n".join(str(x) for x in value)
+    elif isinstance(value, str):
+        text = value
+    else:
+        text = str(value)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return text.strip("\n")
+
+
 def migrate_product_cards(p: dict, base: Path = BASE) -> dict:
     """兼容旧配置：商品里没有 cards 但有 card_file 时，把该文件的内容读进 cards。
 
@@ -43,22 +63,21 @@ def migrate_product_cards(p: dict, base: Path = BASE) -> dict:
             f = (base / rel).resolve()
             if f.exists() and str(f).startswith(str((base / "cards").resolve()) + os.sep):
                 content = _read_text(f)
-        p["cards"] = [l.strip() for l in content.splitlines() if l.strip()] if content else []
-    p["cards"] = [str(c).strip() for c in p["cards"] if str(c).strip()]
+        p["cards"] = content
+    p["cards"] = content_of(p["cards"])
     for r in p.get("variant_rules") or []:
-        if r.get("cards") is None:
-            r["cards"] = []
-        r["cards"] = [str(c).strip() for c in r["cards"] if str(c).strip()]
+        r["cards"] = content_of(r.get("cards"))
     return p
 
 
 def log_used_card(product_name: str, card: str, base: Path = BASE) -> None:
-    """出库记录：时间、商品、卡密。"""
+    """发货记录：时间、商品、发出的内容（换行压成\\n，过长截断）。"""
     try:
         data_dir = base / "data"
         data_dir.mkdir(exist_ok=True)
+        brief = "\\n".join(card.split("\n"))[:300]
         with (data_dir / "used_cards.log").open("a", encoding="utf-8") as fh:
-            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{product_name}\t{card}\n")
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{product_name}\t{brief}\n")
     except Exception:
         pass
 

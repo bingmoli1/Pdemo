@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """商品管理页面（本地网页，仅本机可访问）：
 双击「商品管理.bat」打开，浏览器里可以：
-  - 增/删/改商品：名字、认单关键词、卡密内容（一行一个）、发货话术
-  - 每个商品配置多规格（规格名 + 规格关键词 + 该规格的卡密内容）
+  - 增/删/改商品：名字、认单关键词、发货内容（整段多行）、发货话术
+  - 每个商品配置多规格（规格名 + 规格关键词 + 该规格的发货内容）
   - 切换 演练模式/正式发货
-保存时写回 config.json（卡密内容就存在各商品的 cards 字段里，不再有卡密文件）。
+保存时写回 products.json（发货内容存在各商品的 cards 字段里，一整段文本）。
 改完需重启「启动自动发货.bat」生效。
 """
 import json
@@ -12,7 +12,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from stores import load_settings_and_products, save_products, save_settings
+from stores import content_of, load_settings_and_products, save_products, save_settings
 
 BASE = Path(__file__).resolve().parent
 ADMIN_HTML = BASE / "admin.html"
@@ -25,7 +25,7 @@ def normalize_products(products):
         p["match_keywords"] = [str(k).strip() for k in (p.get("match_keywords") or []) if str(k).strip()]
         p["enabled"] = bool(p.get("enabled", True))
         p["reply_text"] = str(p.get("reply_text", ""))
-        p["cards"] = [str(c).strip() for c in (p.get("cards") or []) if str(c).strip()]
+        p["cards"] = content_of(p.get("cards"))  # 一整段发货内容：原样保留换行，发货时整段发送
         p.pop("card_file", None)  # 旧字段：卡密内容现在直接存在商品里
         rules = []
         for r in p.get("variant_rules") or []:
@@ -35,7 +35,7 @@ def normalize_products(products):
             rules.append({
                 "name": str(r.get("name", "")).strip(),
                 "keywords": kws,
-                "cards": [str(c).strip() for c in (r.get("cards") or []) if str(c).strip()],
+                "cards": content_of(r.get("cards")),
             })
         p["variant_rules"] = rules
     return products

@@ -2,7 +2,7 @@
 """自动发货主逻辑：
 1) 每隔 N 秒轮询闲鱼网页版"消息"页的会话列表；
 2) 某个会话的最后一条消息命中触发词（默认只有"买家已付款"系统消息）→ 点进会话，从右侧聊天面板匹配商品；
-3) 从本地卡密库存取出一个卡密，打开会话自动发送；
+3) 把该商品配置的"发货内容"整段（可多行）发给买家；内容不消耗、不删除，可反复使用；
 4) 按（买家+商品）去重，同一单只发一次；WebSocket 帧监听作为辅助提醒。
 """
 import json
@@ -11,7 +11,7 @@ import re
 import time
 from pathlib import Path
 
-from stores import load_settings_and_products, log_used_card, migrate_product_cards, save_products
+from stores import content_of, load_settings_and_products, log_used_card
 
 BASE = Path(__file__).resolve().parent
 LOGS_DIR = BASE / "logs"
@@ -194,10 +194,10 @@ class AutoDeliverer:
     def resolve_variant(self, product: dict, panel_text: str):
         """多规格路由：product 配了 variant_rules 时，按"关键词在面板文字中最后出现的
         位置"认买家选的规格（订单里的"已选：白色"在标题之后，位置更靠后），
-        返回 (该规格的卡密列表引用, 规格名)；没配规则或没认出来则用商品默认卡密列表。"""
+        返回 (该规格的发货内容, 规格名)；没配规则或没认出来则用商品默认发货内容。"""
         rules = product.get("variant_rules") or []
         if not rules:
-            return product.setdefault("cards", []), None
+            return product.setdefault("cards", ""), None
         matches = []
         for rule in rules:
             pos = -1
@@ -214,12 +214,12 @@ class AutoDeliverer:
             rule = matches[0][1]
             variant = rule.get("name") or "、".join(rule.get("keywords", []))
             self.log.info(f"识别到买家选择的规格：{variant}")
-            return rule.setdefault("cards", []), variant
+            return rule.setdefault("cards", ""), variant
         if matches:
-            self.log.info(f"商品[{product.get('name')}]多个规格关键词位置接近、无法确定买家所选规格，使用默认卡密内容")
+            self.log.info(f"商品[{product.get('name')}]多个规格关键词位置接近、无法确定买家所选规格，使用默认发货内容")
         else:
-            self.log.info(f"商品[{product.get('name')}]配置了规格规则，但未在聊天面板认出所选规格，使用默认卡密内容")
-        return product.setdefault("cards", []), None
+            self.log.info(f"商品[{product.get('name')}]配置了规格规则，但未在聊天面板认出所选规格，使用默认发货内容")
+        return product.setdefault("cards", ""), None
 
     def verify_system_notice(self) -> bool:
         """verify_system_notice=true 时使用：当前聊天里必须能按 system_notice_selectors
@@ -245,39 +245,75 @@ class AutoDeliverer:
             return
 
         if cards is None:
-            cards = product.setdefault("cards", [])
-        if not cards:
+            cards = product.get("cards", "")
+        content = content_of(cards)  # 发货内容 = 框里的全部内容，整段发送
+        if not content:
             spec = f"（规格[{variant}]）" if variant else ""
-            self.log.error(f"❗ 商品[{name}]{spec}卡密库存为空，请到商品管理页补货！")
+            self.log.error(f"❗ 商品[{name}]{spec}发货内容为空，请在商品管理页填写后重试！")
             if buyer:
                 self._skip_no_product.add(buyer)  # 本轮运行内不再反复尝试
             return
-        card = str(cards[0]).strip()
-        self.log.info(f"发货中：商品={name} 卡密={card[:4]}**** 来源={source}")
+        preview = " / ".join(content.split("\n"))[:30]
+        self.log.info(f"发货中：商品={name} 内容[{preview}…] 共{len(content)}字 来源={source}")
 
         ok = False
         try:
             if row is not None:
                 row.click()
                 self.page.wait_for_timeout(1500)
-            reply = product.get("reply_text", "感谢购买！您的卡密如下，请及时保存：\n{card}")
-            ok = self.send_message(reply.replace("{card}", card))
+            reply = product.get("reply_text", "") or "{card}"
+            reply = reply.replace("\\n", "\n")   # 话术里手写的 \n 也当成换行
+            if "{card}" in reply:
+                text = reply.replace("{card}", content)
+            else:
+                text = f"{reply}\n{content}" if reply.strip() else content
+            ok = self.send_message(text)
         finally:
             if ok:
-                cards.pop(0)  # 出库：直接从商品配置的卡密列表移除
-                self.save_cfg()
-                log_used_card(name, card)
-                self.delivered.mark(key, {"product": name, "card": card, "source": source})
-                self.log.info(f"✅ 发货成功：商品={name} 会话={key[:40]}")
+                # 内容不消耗、不删除：同一商品每次发货都发同一整段内容
+                log_used_card(name, content)
+                self.delivered.mark(key, {"product": name, "card": content[:200], "source": source})
+                self.log.info(f"✅ 发货成功：商品={name} 会话={key[:40]}（内容已保留，可继续使用）")
             else:
-                self.log.error("❌ 发送失败，卡密未消耗，稍后会自动重试")
+                self.log.error("❌ 发送失败，稍后会自动重试")
 
-    def save_cfg(self):
-        """卡密出库后把商品（含剩余卡密内容）写回 products.json。"""
+    @staticmethod
+    def _squash(s: str) -> str:
+        """去掉所有空白，用来核对"内容是否都进到输入框里了"。"""
+        return re.sub(r"\s+", "", s or "")
+
+    def _input_text(self, inp) -> str:
         try:
-            save_products(self.cfg.get("products", []))
-        except Exception as e:
-            self.log.error(f"配置写回失败（不影响已发货）: {e}")
+            return inp.inner_text(timeout=1500) or ""
+        except Exception:
+            try:
+                return inp.input_value(timeout=1000) or ""
+            except Exception:
+                return ""
+
+    def _clear_input(self, inp):
+        try:
+            inp.click(timeout=2000)
+        except Exception:
+            pass
+        try:
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.press("Delete")
+        except Exception:
+            pass
+
+    def _type_multiline(self, inp, text: str):
+        """逐行输入：行间用 Shift+Enter 换行（不会误触发送）。"""
+        try:
+            inp.click()
+        except Exception:
+            pass
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if i:
+                self.page.keyboard.press("Shift+Enter")
+            if line:
+                self.page.keyboard.type(line, delay=12)
 
     def send_message(self, text: str) -> bool:
         delay = self.cfg.get("send_delay_seconds", [2, 6])
@@ -289,16 +325,28 @@ class AutoDeliverer:
         if inp is None:
             self.log.error("找不到聊天输入框，请运行 inspect 校准 selectors.json 的 chat_input")
             return False
+        want = self._squash(text)
+        filled = False
+        # 先试一次性填入（最快）；填进去的内容不完整（多行被吞）时，改用逐行输入
         try:
-            inp.click(timeout=3000)
+            self._clear_input(inp)
             inp.fill(text)
+            filled = self._squash(self._input_text(inp)) == want
         except Exception:
+            filled = False
+        if not filled:
             try:
-                inp.click()
-                self.page.keyboard.type(text, delay=30)
+                self._clear_input(inp)
+                self._type_multiline(inp, text)
+                filled = self._squash(self._input_text(inp)) == want
             except Exception as e:
                 self.log.error(f"输入消息失败: {e}")
                 return False
+        if not filled:
+            got = self._input_text(inp)
+            self.log.warning(
+                f"输入框内容与预期不完全一致（预期{len(want)}字，实际{len(self._squash(got))}字），仍尝试发送"
+            )
         sent = False
         for t in self.selectors.get("send_button_text", ["发送"]):
             try:
@@ -316,6 +364,7 @@ class AutoDeliverer:
             except Exception:
                 pass
         self.page.wait_for_timeout(800)
+        # 发送后输入框若还有残留（发送没成功），不影响下一次，下次会先清空
         return sent
 
     def find_row_by_text(self, text: str):

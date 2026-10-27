@@ -7,7 +7,7 @@
   python auto_delivery.py inspect               抓取页面候选选择器 + 截图（校准 config.json 的 selectors 用）
   python auto_delivery.py send-test --search 关键词 --text 内容
                                                 手动向某个会话发送一条消息（真实发送，测试用）
-  python auto_delivery.py cards                 查看各商品卡密库存
+  python auto_delivery.py cards                 查看各商品的发货内容是否已填写
 """
 import argparse
 import json
@@ -24,7 +24,7 @@ try:
 except Exception:
     pass
 
-from stores import DeliveredStore, LOGS_DIR, load_settings_and_products  # noqa: E402
+from stores import DeliveredStore, LOGS_DIR, content_of, load_settings_and_products  # noqa: E402
 
 
 def load_json(path: Path, required: bool = True) -> dict:
@@ -124,19 +124,24 @@ def cmd_send_test(cfg: dict, selectors: dict, search: str, text: str):
 
 
 def cmd_cards(cfg: dict):
-    total = 0
+    """查看各商品/规格的发货内容是否已填写（内容整段发送、不消耗）。"""
+    missing = 0
     for p in cfg.get("products", []):
-        n = len(p.get("cards", []))
-        total += n
-        ok = n > 0
-        lines = [f"  [{'OK' if ok else '缺货!'}] {p.get('name', '?')}：默认库存 {n} 个"]
+        c = content_of(p.get("cards"))
+        if not c:
+            missing += 1
+        desc = f"{len(c)} 字 / {len(c.splitlines())} 行" if c else "发货内容为空"
+        lines = [f"  [{'OK' if c else '未填写!'}] {p.get('name', '?')}：{desc}"]
         for r in p.get("variant_rules") or []:
-            rn = len(r.get("cards", []))
-            total += rn
+            rc = content_of(r.get("cards"))
+            if not rc:
+                missing += 1
             label = r.get("name") or "、".join(r.get("keywords", [])) or "未命名规格"
-            lines.append(f"        规格[{label}]：{rn} 个")
+            rdesc = f"{len(rc)} 字 / {len(rc.splitlines())} 行" if rc else "发货内容为空"
+            lines.append(f"        规格[{label}]：{rdesc}")
         print("\n".join(lines))
-    print(f"合计剩余卡密：{total} 个")
+    print(f"共 {len(cfg.get('products', []))} 个商品；未填写发货内容的项：{missing} 个")
+    print("提示：发货内容整段发给买家，发完不删除，可反复使用。")
 
 
 def main():

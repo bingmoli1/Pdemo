@@ -37,7 +37,7 @@
 </head>
 <body>
 <header>
-  <h1>闲鱼自动发货 · 商品管理</h1>
+  <h1 onclick="goHome()" title="点击返回商品列表" style="cursor:pointer" onmouseover="this.style.opacity=.7" onmouseout="this.style.opacity=1">闲鱼自动发货 · 商品管理</h1>
   <span id="mode" class="badge"></span>
   <label style="font-size:13px"><input type="checkbox" id="dryrun" onchange="onDryRunToggle()"> 演练模式（不真实发货）</label>
   <span id="msg"></span>
@@ -47,27 +47,17 @@
   <div id="listView">
     <div class="row" style="align-items:center;margin-bottom:10px">
       <button class="save" onclick="openForm(-1)">＋ 新增商品</button>
-      <button class="mini" onclick="toggleImport()">⬇ 批量导入</button>
       <span class="hint" style="margin:0">认单规则：买家付款后，在所有已启用商品里找与聊天面板商品标题<b>关键词重合最多</b>的一个发货。</span>
-    </div>
-    <div class="card" id="importBox" style="display:none">
-      <b>批量导入商品</b>
-      <div class="hint">把闲鱼在售商品的标题粘贴到下面，<b>每行一个</b>；整行标题会作为认单关键词（之后可编辑改短）。导入后到各商品的「编辑」里填卡密内容。</div>
-      <textarea id="importText" rows="6" style="width:100%;box-sizing:border-box" placeholder="示例商品标题一&#10;示例商品标题二&#10;……"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button class="mini" onclick="doImport()">导入这些标题</button>
-        <button class="del" onclick="document.getElementById('importBox').style.display='none'">收起</button>
-      </div>
     </div>
     <div class="card" style="padding:0;overflow:auto">
       <table>
         <thead><tr>
-          <th>商品</th><th>认单关键词</th><th>规格</th><th>状态</th><th>操作</th>
+          <th>商品</th><th>认单关键词</th><th>发货内容（整段发送）</th><th>规格</th><th>状态</th><th>操作</th>
         </tr></thead>
         <tbody id="prodRows"></tbody>
       </table>
     </div>
-    <div class="hint">卡密内容在每件商品的「编辑」页里填写（一行一个）；保存后需重启「启动自动发货.bat」才生效。</div>
+    <div class="hint">发货内容在每件商品的「编辑」页里填写：框里<b>所有内容</b>会原样整段发给买家（支持多行），发完不删除、可反复使用。保存后需重启「启动自动发货.bat」才生效。</div>
   </div>
 
   <!-- 编辑/新增 表单视图 -->
@@ -79,13 +69,15 @@
         <label class="f">认单关键词（多个用逗号隔开，须能在商品标题里找到）<input id="f_keywords" placeholder="例如：网盘会员年卡, 秒发"></label>
       </div>
       <div class="row">
-        <label class="f">卡密内容（一行一个：卡密/链接/兑换码都行。发货自动从第一行取出并移除）<textarea id="f_cards" rows="6" placeholder="CODE-0001-AAAA&#10;CODE-0002-BBBB&#10;……"></textarea></label>
+        <label class="f">发货内容（框里所有内容会原样整段发送，可多行：卡密/链接/兑换码/说明都行；发完不删除，可反复使用）
+          <textarea id="f_cards" rows="8" placeholder="第一行内容&#10;第二行内容&#10;……&#10;（换行会原样保留，整段作为一条消息发出）"></textarea>
+        </label>
       </div>
       <div class="row">
-        <label class="f">发货话术（{card} 会替换成卡密；\n 为换行）<textarea id="f_reply" rows="2"></textarea></label>
+        <label class="f">发货话术（{card} 会替换成上面整段发货内容；未写 {card} 时自动把内容附在话术后面；\n 为换行）<textarea id="f_reply" rows="2"></textarea></label>
         <label style="font-size:13px;padding-bottom:8px"><input type="checkbox" id="f_enabled"> 启用该商品</label>
       </div>
-      <div><b style="font-size:13px">规格（可选；不同规格发不同内容时才需要配，每个规格有自己的卡密内容）</b></div>
+      <div><b style="font-size:13px">规格（可选；不同规格发不同内容时才需要配，每个规格有自己的发货内容）</b></div>
       <div id="rulesBox"></div>
       <button class="mini" onclick="addRule()">＋ 添加规格</button>
       <div class="row" style="margin-top:14px">
@@ -118,6 +110,12 @@ async function onDryRunToggle(){
   toast('模式已切换 ✔（重启自动发货程序后生效）');
 }
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+/* 发货内容统一成字符串：老数据可能是数组（一行一个），拼成多行 */
+function toText(v){
+  if(v==null) return '';
+  if(Array.isArray(v)) return v.join('\n');
+  return String(v);
+}
 function toast(text, ok=true){
   const msg = document.getElementById('msg');
   msg.textContent = text;
@@ -135,6 +133,9 @@ async function postSave(){
 }
 
 /* ---------- 列表 ---------- */
+function goHome(){
+  showList();  // 点顶部标题直接回列表，不弹确认
+}
 function showList(){
   document.getElementById('formView').style.display = 'none';
   document.getElementById('listView').style.display = 'block';
@@ -145,7 +146,7 @@ function renderTable(){
   tb.innerHTML = '';
   const ps = state.config.products;
   if(!ps.length){
-    tb.innerHTML = '<tr><td colspan="5" class="hint" style="padding:18px">还没有商品。点「＋ 新增商品」，或「⬇ 批量导入」粘贴在售商品标题。</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="hint" style="padding:18px">还没有商品。点「＋ 新增商品」添加。</td></tr>';
     return;
   }
   ps.forEach((p,i)=>{
@@ -155,9 +156,16 @@ function renderTable(){
     const ruleTxt = rules.length
       ? rules.map(r => `<b>${esc(r.name || '未命名规格')}</b>`).join('<br>')
       : '—';
+    const content = toText(p.cards);
+    const firstLine = (content.split('\n').find(l=>l.trim()) || '').trim();
+    const cPrev = content
+      ? esc(firstLine.slice(0,24)) + (firstLine.length>24 || content.indexOf('\n')>=0 ? '…' : '')
+        + `<div class="hint" style="margin:2px 0 0">${content.length} 字 / ${content.split('\n').length} 行</div>`
+      : '<span class="hint">未填写</span>';
     tr.innerHTML = `
       <td><b>${esc(p.name)}</b></td>
       <td class="kw">${esc(kws)||'<span class="hint">未设置</span>'}</td>
+      <td class="kw">${cPrev}</td>
       <td class="kw">${ruleTxt}</td>
       <td><span class="${p.enabled!==false?'on':'off'}">${p.enabled!==false?'启用':'停用'}</span></td>
       <td style="white-space:nowrap">
@@ -166,24 +174,6 @@ function renderTable(){
       </td>`;
     tb.appendChild(tr);
   });
-}
-function toggleImport(){
-  const b = document.getElementById('importBox');
-  b.style.display = (b.style.display === 'none') ? 'block' : 'none';
-}
-async function doImport(){
-  const lines = document.getElementById('importText').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
-  if(!lines.length){ alert('请先把商品标题粘贴进文本框，每行一个'); return; }
-  lines.forEach(t=> state.config.products.push({
-    name: t, match_keywords: [t], cards: [], enabled: true,
-    reply_text: '感谢购买！您的卡密如下，请及时保存：\n{card}', variant_rules: []
-  }));
-  if(await postSave()){
-    document.getElementById('importText').value = '';
-    document.getElementById('importBox').style.display = 'none';
-    toast('已导入 ' + lines.length + ' 个商品，点「编辑」填卡密内容 ✔');
-    await load();
-  }
 }
 async function delProduct(i){
   if(!confirm('确定删除商品「'+state.config.products[i].name+'」？')) return;
@@ -195,12 +185,12 @@ async function delProduct(i){
 function openForm(i){
   editIdx = i;
   draft = i >= 0 ? JSON.parse(JSON.stringify(state.config.products[i]))
-                 : {name:'', match_keywords:[], cards:[], enabled:true,
+                 : {name:'', match_keywords:[], cards:'', enabled:true,
                     reply_text:'感谢购买！您的卡密如下，请及时保存：\n{card}', variant_rules:[]};
   document.getElementById('formTitle').textContent = i >= 0 ? '编辑商品：' + (state.config.products[i].name||'') : '新增商品';
   document.getElementById('f_name').value = draft.name || '';
   document.getElementById('f_keywords').value = (draft.match_keywords||[]).join('，');
-  document.getElementById('f_cards').value = (draft.cards||[]).join('\n');
+  document.getElementById('f_cards').value = toText(draft.cards);
   document.getElementById('f_enabled').checked = draft.enabled !== false;
   document.getElementById('f_reply').value = draft.reply_text || '';
   document.getElementById('listView').style.display = 'none';
@@ -220,22 +210,22 @@ function renderRules(){
         <label class="f">规格关键词（如：白色）<input value="${esc((r.keywords||[]).join('，'))}" oninput="draft.variant_rules[${j}].keywords=this.value.split(/[,，\\s]+/).filter(x=>x)"></label>
       </div>
       <div class="row">
-        <label class="f">该规格的卡密内容（一行一个，发货后自动移除）<textarea rows="3" oninput="draft.variant_rules[${j}].cards=this.value.split(/\\n+/).map(s=>s.trim()).filter(Boolean)">${esc((r.cards||[]).join('\n'))}</textarea></label>
+        <label class="f">该规格的发货内容（框里所有内容整段发送，发完不删除）<textarea rows="4" oninput="draft.variant_rules[${j}].cards=this.value">${esc(toText(r.cards))}</textarea></label>
         <button class="del" onclick="draft.variant_rules.splice(${j},1);renderRules()">删除规格</button>
       </div>`;
     box.appendChild(d);
   });
-  if(!(draft.variant_rules||[]).length) box.innerHTML = '<div class="hint">未配置规格。所有买家都发上方默认卡密内容。</div>';
+  if(!(draft.variant_rules||[]).length) box.innerHTML = '<div class="hint">未配置规格。所有买家都发上方默认发货内容。</div>';
 }
 function addRule(){
   draft.variant_rules = draft.variant_rules || [];
-  draft.variant_rules.push({name:'', keywords:[], cards:[]});
+  draft.variant_rules.push({name:'', keywords:[], cards:''});
   renderRules();
 }
 function bindDraft(){
   draft.name = document.getElementById('f_name').value.trim();
   draft.match_keywords = document.getElementById('f_keywords').value.split(/[,，]+/).map(s=>s.trim()).filter(Boolean);
-  draft.cards = document.getElementById('f_cards').value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  draft.cards = document.getElementById('f_cards').value;  // 原样保留：框里所有内容都发
   draft.enabled = document.getElementById('f_enabled').checked;
   draft.reply_text = document.getElementById('f_reply').value;
 }
