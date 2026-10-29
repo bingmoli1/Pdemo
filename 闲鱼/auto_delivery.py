@@ -208,7 +208,7 @@ def main():
         except KeyError:
             names = "、".join(a["name"] for a in (cfg.get("accounts") or [])) or "（还没有账号）"
             print(f"✘ 账号管理里没有「{args.account}」。现有账号：{names}")
-            print("  可运行的账号见商品管理页「账号管理」，或双击「启动自动发货.bat」用当前账号。")
+            print("  可运行的账号见商品管理页「账号管理」，或运行 python auto_delivery.py run 用当前账号。")
             sys.exit(1)
 
     selectors = cfg.get("selectors") or load_json(BASE / "selectors.json", required=False) or {}

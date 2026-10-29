@@ -82,7 +82,7 @@
         <tbody id="prodRows"></tbody>
       </table>
     </div>
-    <div class="hint">发货内容在每件商品的「编辑」页里填写：框里<b>所有内容</b>会原样整段发给买家（支持多行），发完不删除、可反复使用。保存后需重启「启动自动发货.bat」才生效。</div>
+    <div class="hint">发货内容在每件商品的「编辑」页里填写：框里<b>所有内容</b>会原样整段发给买家（支持多行），发完不删除、可反复使用。保存后请在商品管理页对该账号「停止」后「启动」生效。</div>
   </div>
 
   <!-- 编辑/新增 表单视图 -->
@@ -173,7 +173,7 @@ function renderAccounts(){
         ? (curItem.nick === accts.current ? curItem.nick : curItem.nick + '（' + accts.current + '）')
         : accts.current);
   if(!(accts.items||[]).length){
-    box.innerHTML = '<div class="hint" style="margin-top:8px">还没有账号。双击「启动自动发货.bat」扫码登录一次，登录成功的账号会自动出现在这里。</div>';
+    box.innerHTML = '<div class="hint" style="margin-top:8px">还没有账号。在商品管理页点「＋ 新增账号」扫码登录一次，登录成功的账号会自动出现在这里。</div>';
     return;
   }
   box.innerHTML = accts.items.map((it,i)=>{

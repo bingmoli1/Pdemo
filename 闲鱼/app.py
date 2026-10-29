@@ -179,12 +179,21 @@ class AutoDeliverer:
 
     def match_product(self, text: str):
         """在所有启用的商品里找关键词重合最多的：
-        先比命中关键词个数，再比命中关键词总字数（更长更具体者优先）。"""
+        先比命中关键词个数，再比命中关键词总字数（更长更具体者优先）。
+
+        认单关键词（match_keywords）之外，商品的「商品名称」（name）也自动作为一条
+        认单关键词参与匹配——即"对照商品名称词条"：把商品名称填成闲鱼标题，买家咨询时
+        聊天面板里的商品卡片标题对得上就直接命中，不必再单独填认单关键词。
+        认单关键词仍然有效、且优先级体现在计分上（命中更多/更长者胜）。"""
         best, best_score = None, None
         for p in self.cfg.get("products", []):
             if not p.get("enabled", True):
                 continue
-            hits = [k for k in p.get("match_keywords", []) if k and k in text]
+            kws = [k for k in p.get("match_keywords", []) if k and k not in ("", None)]
+            name = str(p.get("name", "")).strip()
+            if name and name not in kws:
+                kws.append(name)          # 商品名称词条也参与认单匹配
+            hits = [k for k in kws if k and k in text]
             if not hits:
                 continue
             score = (len(hits), sum(len(k) for k in hits))

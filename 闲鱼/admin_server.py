@@ -10,7 +10,7 @@
     （各自独立的登录档案、发货记录、日志文件，进程里只看得见自己这个账号）
 保存时写回 products.json（发货内容存在各商品的 cards 字段里，一整段文本）；
 账号信息写回 config.json 的 accounts / current_account / user_data_dir。
-改完需重启「启动自动发货.bat」生效。
+改完需在商品管理页对该账号「停止」后「启动」生效（或重启对应的自动发货实例）。
 """
 import json
 import os
@@ -373,7 +373,7 @@ def handle_account_action(data: dict):
         (BASE / a["dir"]).mkdir(parents=True, exist_ok=True)
         cfg["current_account"] = a["name"]
         cfg["user_data_dir"] = a["dir"]
-        msg = f"已切换到「{a.get('nick') or a['name']}」，重启「启动自动发货.bat」生效。"
+        msg = f"已切换到「{a.get('nick') or a['name']}」，请在商品管理页对该账号「停止」后「启动」生效。"
 
     elif action == "rename":
         old = clean_account_name(data.get("name"))
@@ -419,7 +419,7 @@ def handle_account_action(data: dict):
                 remove_tree(p)
             except Exception:
                 return False, ("删除失败：这个账号的登录档案正在被占用（多半是自动发货还在运行）。"
-                               "请先双击「停止自动发货.bat」关掉浏览器，再回来删除。")
+                               "请先在商品管理页对该账号点「■ 停止」关掉浏览器，再回来删除。")
 
         accs.remove(a)
         switched = ""
