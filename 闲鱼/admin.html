@@ -347,7 +347,6 @@ function renderTable(){
     const firstLine = (content.split('\n').find(l=>l.trim()) || '').trim();
     const cPrev = content
       ? esc(firstLine.slice(0,24)) + (firstLine.length>24 || content.indexOf('\n')>=0 ? '…' : '')
-        + `<div class="hint" style="margin:2px 0 0">${content.length} 字 / ${content.split('\n').length} 行</div>`
       : '<span class="hint">未填写</span>';
     tr.innerHTML = `
       <td><b>${esc(p.name)}</b></td>

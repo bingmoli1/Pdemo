@@ -1,11 +1,12 @@
 {
   "products": [
     {
-      "name": "1",
+      "name": "苏打水",
       "match_keywords": [
-        "2"
+        "2速度",
+        "2342"
       ],
-      "cards": "3",
+      "cards": "32131231231313",
       "enabled": true,
       "reply_text": "所有网盘如下，请及时保存：\n{card}",
       "variant_rules": []
