@@ -730,34 +730,43 @@ class QRApp:
         self.decode(img)
 
     def paste_image(self):
+        """仅当剪贴板内容是真正的图片时才生效（送入解码识别）。
+
+        其他任何内容（纯文本、非图片文件、空剪贴板）一律不处理：
+        不生成二维码、不改写输入框，只提示“剪贴板中没有图片”。
+        需要粘贴文本请直接用 Ctrl+V 粘到左侧输入框（Tk 输入框原生支持）。
+        """
         try:
             clip = ImageGrab.grabclipboard()
         except Exception as e:
             messagebox.showerror("剪贴板不可用", str(e))
             return
-        if clip is None:
-            # PIL 的 grabclipboard 不支持文本格式(文本时返回 None)，
-            # 回退用 tkinter 读取文本：填入左侧输入框并生成二维码
-            try:
-                text = self.root.clipboard_get()
-            except tk.TclError:
-                text = ""
-            if text.strip():
-                self.link_var.set(text.strip())
-                self._do_gen_qr(text.strip(), verbose=False)
-                self.set_status("已从剪贴板粘贴文本并生成二维码", "ok")
-                return
+
+        # 只认真正的图片：PIL 图像对象，或能被 PIL 打开的图片文件
+        img = None
+        if isinstance(clip, Image.Image):
+            img = clip
+        elif isinstance(clip, list):
+            # 复制的是文件：逐个尝试，取第一个真正能作为图片打开的
+            for p in clip:
+                try:
+                    img = Image.open(p)
+                    break
+                except Exception:
+                    continue
+
+        if img is None:
+            # 不是图片 -> 不生效
             messagebox.showwarning(
-                "提示", "剪贴板中没有图片或文本，请先复制图片（如Win+Shift+S）")
+                "提示", "剪贴板中没有图片，请先复制图片（如 Win+Shift+S 截图）")
+            self.set_status("粘贴未生效：剪贴板内容不是图片", "warn")
             return
-        if isinstance(clip, list):
-            try:
-                img = Image.open(clip[0]).convert("RGB")
-            except Exception as e:
-                messagebox.showerror("打开失败", str(e))
-                return
-        else:
-            img = clip.convert("RGB")
+
+        try:
+            img = img.convert("RGB")
+        except Exception as e:
+            messagebox.showerror("打开失败", str(e))
+            return
         self.src_name_var.set("剪贴板图片")
         self.decode(img)
 

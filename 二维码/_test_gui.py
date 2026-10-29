@@ -127,21 +127,52 @@ clip = ImageGrab.grabclipboard()
 check("复制二维码图片", clip is not None and isinstance(clip, Image.Image),
       repr(type(clip)))
 
-# 12) 粘贴文本 (剪贴板为文本时生成二维码)
+# 12) 粘贴非图片(文本) 不生效 —— 仅图片才处理
+app.link_var.set("keep-me")      # 哨兵值：不应被改写
+app.last_link = ""
+app.result_var.set("")
 root.clipboard_clear()
 root.clipboard_append("pasted-text-123")
 root.update()
+_popups.clear()
 app.paste_image()
 root.update()
-check("粘贴文本生成二维码", app.link_var.get() == "pasted-text-123"
-      and app.qr_image is not None)
+check("粘贴非图片(文本)不生效",
+      app.link_var.get() == "keep-me"          # 输入框未被改写
+      and app.last_link == ""                  # 未产生解码结果
+      and len(_popups) == 1 and _popups[0][0] == "warn",
+      f"link_var={app.link_var.get()!r} last_link={app.last_link!r} popups={_popups}")
 
-# 13) 粘贴图片 (从剪贴板图片解码) —— 此时二维码内容为上一步粘贴的文本
+# 13) 粘贴图片 (剪贴板为图片时解码)
+app._do_gen_qr("paste-image-test", verbose=True)
 app._copy_qr()
 root.update()
+check("复制后剪贴板含图片",
+      isinstance(ImageGrab.grabclipboard(), Image.Image),
+      repr(type(ImageGrab.grabclipboard())))
+app.last_link = ""
 app.paste_image()
 root.update()
-check("粘贴图片解码", app.last_link == "pasted-text-123", app.last_link)
+check("粘贴图片解码", app.last_link == "paste-image-test", app.last_link)
+
+# 13b) 剪贴板为文件列表但不是图片 -> 不生效
+orig_grab = ImageGrab.grabclipboard
+txt_file = os.path.join(tempfile.gettempdir(), "qr_test_notimage.txt")
+with open(txt_file, "w", encoding="utf-8") as f:
+    f.write("not an image")
+ImageGrab.grabclipboard = lambda: [txt_file]
+try:
+    app.link_var.set("keep-me2")
+    app.last_link = ""
+    _popups.clear()
+    app.paste_image()
+    root.update()
+    check("剪贴板非图片文件不生效",
+          app.link_var.get() == "keep-me2" and app.last_link == ""
+          and len(_popups) == 1 and _popups[0][0] == "warn",
+          f"link_var={app.link_var.get()!r} last_link={app.last_link!r} popups={_popups}")
+finally:
+    ImageGrab.grabclipboard = orig_grab
 
 # 14) 拖入处理 (模拟 handle_drop)
 drop_file = os.path.join(tempfile.gettempdir(), "qr_test_drop.png")
@@ -186,7 +217,7 @@ dh = app.dcard.winfo_height()
 check("双卡等高", gh == dh, f"{gh} vs {dh}")
 
 # 清理
-for p in (saved_path, drop_file, spaced_file):
+for p in (saved_path, drop_file, spaced_file, txt_file):
     try:
         os.remove(p)
     except OSError:
