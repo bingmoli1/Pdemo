@@ -183,7 +183,7 @@ def cmd_cards(cfg: dict):
             rc = content_of(r.get("cards"))
             if not rc:
                 missing += 1
-            label = r.get("name") or "、".join(r.get("keywords", [])) or "未命名规格"
+            label = r.get("name") or "未命名规格"
             rdesc = f"{len(rc)} 字 / {len(rc.splitlines())} 行" if rc else "发货内容为空"
             lines.append(f"        规格[{label}]：{rdesc}")
         print("\n".join(lines))

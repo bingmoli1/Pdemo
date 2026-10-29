@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """商品管理页面（本地网页，仅本机可访问）：
 双击「商品管理.bat」打开，浏览器里可以：
-  - 增/删/改商品：名字、认单关键词、发货内容（整段多行）、发货话术
-  - 每个商品配置多规格（规格名 + 规格关键词 + 该规格的发货内容）
+  - 增/删/改商品：名字（填成闲鱼商品标题）、发货内容（整段多行）、发货话术
+    匹配按"商品名/规格名与订单文字重合的字数"自动认商品与规格，无需填关键词
+  - 每个商品配置多规格（规格名 + 该规格的发货内容）
   - 切换 演练模式/正式发货
   - 账号管理：新增（弹窗口扫码登录）/ 改名 / 切换 / 删除闲鱼登录账号
     （每个账号一个独立的浏览器档案目录）
@@ -39,19 +40,18 @@ RUN_SCRIPT = BASE / "auto_delivery.py"
 def normalize_products(products):
     for p in products:
         p["name"] = str(p.get("name", "")).strip() or "未命名商品"
-        p["match_keywords"] = [str(k).strip() for k in (p.get("match_keywords") or []) if str(k).strip()]
         p["enabled"] = bool(p.get("enabled", True))
         p["reply_text"] = str(p.get("reply_text", ""))
         p["cards"] = content_of(p.get("cards"))  # 一整段发货内容：原样保留换行，发货时整段发送
-        p.pop("card_file", None)  # 旧字段：卡密内容现在直接存在商品里
+        p.pop("card_file", None)       # 旧字段：卡密内容现在直接存在商品里
+        p.pop("match_keywords", None)  # 不再使用认单关键词，清理旧字段
         rules = []
         for r in p.get("variant_rules") or []:
-            kws = [str(k).strip() for k in (r.get("keywords") or []) if str(k).strip()]
-            if not kws:
+            rname = str(r.get("name", "")).strip()
+            if not rname:
                 continue
             rules.append({
-                "name": str(r.get("name", "")).strip(),
-                "keywords": kws,
+                "name": rname,
                 "cards": content_of(r.get("cards")),
             })
         p["variant_rules"] = rules

@@ -146,7 +146,7 @@ class AutoDeliverer:
             self._skip_no_product.add(buyer)
             self.log.info(
                 f"[{source}] 买家[{buyer}]的会话里未匹配到任何商品，跳过"
-                "（如属误判请检查 config.json 对应商品的 match_keywords）"
+                "（如属误判请确认商品名称与订单/聊天里的商品名是否一致）"
             )
             return
         cards, variant = self.resolve_variant(product, panel_text)
@@ -178,25 +178,19 @@ class AutoDeliverer:
         return None
 
     def match_product(self, text: str):
-        """在所有启用的商品里找关键词重合最多的：
-        先比命中关键词个数，再比命中关键词总字数（更长更具体者优先）。
-
-        认单关键词（match_keywords）之外，商品的「商品名称」（name）也自动作为一条
-        认单关键词参与匹配——即"对照商品名称词条"：把商品名称填成闲鱼标题，买家咨询时
-        聊天面板里的商品卡片标题对得上就直接命中，不必再单独填认单关键词。
-        认单关键词仍然有效、且优先级体现在计分上（命中更多/更长者胜）。"""
+        """按「商品名称」与文本的字面重合度匹配：取名称里出现在文本中的字数最多的那个商品。
+        不再使用认单关键词（match_keywords）——只看商品名称与订单/聊天文字对得上的字。"""
         best, best_score = None, None
+        tset = set(text)
         for p in self.cfg.get("products", []):
             if not p.get("enabled", True):
                 continue
-            kws = [k for k in p.get("match_keywords", []) if k and k not in ("", None)]
             name = str(p.get("name", "")).strip()
-            if name and name not in kws:
-                kws.append(name)          # 商品名称词条也参与认单匹配
-            hits = [k for k in kws if k and k in text]
-            if not hits:
+            if not name:
                 continue
-            score = (len(hits), sum(len(k) for k in hits))
+            score = len(set(name) & tset)     # 商品名里出现在文本中的去重字符数
+            if score <= 0:
+                continue
             if best_score is None or score > best_score:
                 best, best_score = p, score
         return best
@@ -225,33 +219,26 @@ class AutoDeliverer:
             return ""
 
     def resolve_variant(self, product: dict, panel_text: str):
-        """多规格路由：product 配了 variant_rules 时，按"关键词在面板文字中最后出现的
-        位置"认买家选的规格（订单里的"已选：白色"在标题之后，位置更靠后），
-        返回 (该规格的发货内容, 规格名)；没配规则或没认出来则用商品默认发货内容。"""
+        """多规格路由：不再使用规格关键词，按「规格名」与文本的字面重合度取最多的规格。
+        返回 (该规格的发货内容, 规格名)；未配规则或没认出（文本里没有任一规格名）则用商品默认发货内容。"""
         rules = product.get("variant_rules") or []
         if not rules:
             return product.setdefault("cards", ""), None
-        matches = []
+        tset = set(panel_text)
+        best, best_score, best_name = None, None, None
         for rule in rules:
-            pos = -1
-            for kw in rule.get("keywords", []):
-                if kw:
-                    pos = max(pos, panel_text.rfind(kw))
-            if pos >= 0:
-                matches.append((pos, rule))
-        matches.sort(key=lambda x: -x[0])
-        gap = int(self.cfg.get("variant_gap_chars", 4))
-        # 只有"最后出现位置"明显领先（如订单里"已选：白色"在标题之后）才认定规格；
-        # 多个规格挤在标题里分不清时，宁可走默认也不猜，避免发错货
-        if matches and (len(matches) == 1 or matches[0][0] - matches[1][0] > gap):
-            rule = matches[0][1]
-            variant = rule.get("name") or "、".join(rule.get("keywords", []))
-            self.log.info(f"识别到买家选择的规格：{variant}")
-            return rule.setdefault("cards", ""), variant
-        if matches:
-            self.log.info(f"商品[{product.get('name')}]多个规格关键词位置接近、无法确定买家所选规格，使用默认发货内容")
-        else:
-            self.log.info(f"商品[{product.get('name')}]配置了规格规则，但未在聊天面板认出所选规格，使用默认发货内容")
+            rname = str(rule.get("name", "")).strip()
+            if not rname:
+                continue
+            score = len(set(rname) & tset)     # 规格名里出现在文本中的去重字符数
+            if score <= 0:
+                continue
+            if best_score is None or score > best_score:
+                best, best_score, best_name = rule, score, rname
+        if best is not None:
+            self.log.info(f"识别到买家选择的规格：{best_name}")
+            return best.setdefault("cards", ""), best_name
+        self.log.info(f"商品[{product.get('name')}]配置了规格，但文本中未认出所选规格名称，使用默认发货内容")
         return product.setdefault("cards", ""), None
 
     def verify_system_notice(self) -> bool:
