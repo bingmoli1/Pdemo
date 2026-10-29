@@ -50,23 +50,62 @@ except Exception as e:
     root.destroy()
     sys.exit(1)
 
-# 2) 生成二维码 (正常链接)
+def cancel_pending():
+    """取消待执行的自动刷新定时器, 保证测试确定性。"""
+    if getattr(app, "_gen_job", None) is not None:
+        try:
+            app.root.after_cancel(app._gen_job)
+        except Exception:
+            pass
+        app._gen_job = None
+
+
+# 2) 输入框文字变动 -> 自动刷新二维码
 app.link_var.set("https://example.com/test")
-app.gen_qr()
+root.update()
+check("输入框变动触发自动刷新(已排程)", app._gen_job is not None)
+cancel_pending()
+app._refresh_qr()
 root.update()
 check("生成二维码", app.qr_image is not None and app.qr_box.img_lbl.cget("image") != "")
 check("生成状态栏 ok", "二维码已生成" in app.status_var.get(), app.status_var.get())
 
-# 3) 生成空输入提示
+# 3) 输入清空 -> 二维码清空回到占位(不再弹窗)
+cancel_pending()
 app.link_var.set("")
-before = app.status_var.get()
 _popups.clear()
-app.gen_qr()
+app._refresh_qr()
 root.update()
-check("空输入弹出提示", len(_popups) == 1 and _popups[0][0] == "warn", repr(_popups))
-check("空输入不生成", app.qr_image is not None)  # 保留旧图, 不崩溃
+check("空输入清空二维码",
+      app.qr_image is None and app.qr_box.img_lbl.cget("image") == "",
+      f"qr_image={app.qr_image} image={app.qr_box.img_lbl.cget('image')!r}")
+check("空输入不弹窗", len(_popups) == 0, repr(_popups))
+
+# 3b) 粘贴按钮: 剪贴板文字 -> 输入框, 二维码随之更新
+cancel_pending()
+root.clipboard_clear()
+root.clipboard_append("https://pasted.example/x")
+root.update()
+app.paste_text()
+root.update()
+check("粘贴文字到输入框", app.link_var.get() == "https://pasted.example/x",
+      app.link_var.get())
+cancel_pending()
+app._refresh_qr()
+root.update()
+check("粘贴后二维码随之更新", app.qr_image is not None)
+
+# 3c) 粘贴按钮: 剪贴板无文字 -> 提示
+cancel_pending()
+root.clipboard_clear()
+root.update()
+_popups.clear()
+app.paste_text()
+root.update()
+check("粘贴空剪贴板提示", len(_popups) == 1 and _popups[0][0] == "warn", repr(_popups))
 
 # 4) 生成中文内容
+cancel_pending()
 app.link_var.set("你好，二维码！")
 app._do_gen_qr("你好，二维码！", verbose=True)
 root.update()

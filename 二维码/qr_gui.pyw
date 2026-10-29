@@ -316,6 +316,11 @@ class PreviewBox(tk.Frame):
         self.img_lbl.configure(image=photo)
         self.hint_frame.place_forget()
 
+    def clear(self):
+        """回到初始占位状态（无图片 + 重新显示提示文字）。"""
+        self.img_lbl.configure(image="")
+        self.hint_frame.place(relx=0.5, rely=0.5, anchor="center")
+
 
 class Card(tk.Frame):
     """白色圆角卡片 + 投影，内容先自然布局再合成底图。"""
@@ -386,6 +391,7 @@ class QRApp:
         self.src_photo = None
         self.qr_image = None      # 生成的最终 PIL 图像
         self.last_link = ""       # 最近解码出的字符串
+        self._gen_job = None      # 自动刷新二维码的防抖定时器
         self._build_ui()
         self.root.update_idletasks()
         # 两张卡片强制等高（取自然高度较大者），整体更整齐
@@ -425,19 +431,50 @@ class QRApp:
         except Exception as e:
             if verbose:
                 messagebox.showerror("生成失败", str(e))
-            return
+            return False
 
         preview = self._scale(self.qr_image, qr=True)
         self.qr_photo = ImageTk.PhotoImage(preview)
         self.qr_box.show(self.qr_photo)
         self.set_status(f"二维码已生成：{link}", "ok")
+        return True
 
-    def gen_qr(self):
-        link = self.link_var.get().strip()
-        if not link:
-            messagebox.showwarning("提示", "请输入链接")
+    # ------------------------------------------------------------------
+    # 输入框内容变动 -> 自动刷新二维码
+    # ------------------------------------------------------------------
+    def _on_link_changed(self, *_args):
+        """输入框文字变动：防抖 150ms 后自动重新生成二维码。"""
+        if self._gen_job is not None:
+            self.root.after_cancel(self._gen_job)
+        self._gen_job = self.root.after(150, self._refresh_qr)
+
+    def _refresh_qr(self):
+        """按当前输入框内容刷新二维码；内容为空则清空回到占位。"""
+        self._gen_job = None
+        text = self.link_var.get().strip()
+        if not text:
+            self.qr_image = None
+            self.qr_box.clear()
+            self.set_status("就绪")
             return
-        self._do_gen_qr(link, verbose=True)
+        # 自动刷新是静默的，失败时用状态栏提示（如内容过长）
+        if not self._do_gen_qr(text, verbose=False):
+            self.set_status("生成失败：内容可能过长或不受支持", "err")
+
+    def paste_text(self):
+        """把剪贴板文字填入左侧输入框（随后自动刷新二维码）。
+
+        只处理文本：剪贴板是图片时 clipboard_get 取不到文本，会提示“没有文字”。
+        """
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            text = ""
+        text = text.strip()
+        if not text:
+            messagebox.showwarning("提示", "剪贴板中没有文字，请先复制文本")
+            return
+        self.link_var.set(text)   # 触发 trace -> 自动刷新二维码
 
     # ------------------------------------------------------------------
     # 解码公共逻辑
@@ -647,11 +684,12 @@ class QRApp:
         row1 = tk.Frame(gcard.body, bg=CARD, highlightthickness=0, bd=0)
         row1.pack(fill="x")
         self.link_var = tk.StringVar()
+        # 文字一变动就自动重新生成二维码（防抖 150ms）
+        self.link_var.trace_add("write", self._on_link_changed)
         entry = ttk.Entry(row1, textvariable=self.link_var, font=(FONT, 10),
                           width=18)
         entry.pack(side="left", fill="x", expand=True, padx=(0, P(8)))
-        entry.bind("<Return>", lambda e: self.gen_qr())
-        Btn(row1, ui, "生成", self.gen_qr, kind="primary").pack(side="left")
+        Btn(row1, ui, "粘贴", self.paste_text, kind="primary").pack(side="left")
 
         self.qr_box = PreviewBox(gcard.body, ui, "生成的二维码\n将显示在这里")
         self.qr_box.pack(pady=(P(10), 0))

@@ -11,7 +11,7 @@ pyinstaller --noconfirm --noupx -F -w --name "二维码工具" --icon qr_icon.ic
 
 方式二：用已固化的 spec 文件（推荐，配置写在 `.spec` 里）
 ```bash
-pyinstaller --noconfirm 二维码工具.spec
+pyinstaller --noconfirm --distpath . 二维码工具.spec
 ```
 
 说明：
