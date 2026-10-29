@@ -14,4 +14,4 @@
 3. 启动「启动自动发货.bat」，10 分钟内手机扫码登录新号（或先跑 `python auto_delivery.py login`）。
 4. 核对：日志首行「本机用户ID(unb)」应是新号；`products.json` 的认单关键词要能匹配新号在售商品，否则会"未匹配到商品，跳过"。
 5. 换回旧号：把 `user_data_dir` 改回旧目录即可。
-- 注意：多账号各自独立商品配置、同时并行跑，当前版本不支持（目录/端口固定）。
+- 多账号并行（2026-10-29 起支持）：每个账号是一个沙盒——登录档案、`delivered.<账号>.json`、`used_cards.<账号>.log`、`logs/run_<账号>.log` 各自独立；实例内 `cfg["accounts"]` 只含自己（`sandbox_for`），不会改「当前账号」。商品/发货内容所有账号共用一份 products.json（用户明确选择）。运行实例记账 `data/.running/<账号>.json`（pid+dir+时间），同一账号/同一档案目录重复启动会被拦截；管理页每个账号可单独启动/停止，也可全部启停。服务版本 4（前后端握手 PAGE_VERSION/APP_VERSION 保持一致）。

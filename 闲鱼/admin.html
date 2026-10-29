@@ -37,6 +37,9 @@
   .acctRow .dir{font-size:12px;color:#999;font-family:Consolas,monospace}
   .loginState{font-size:12px;color:#b07d00;background:#fff8e1;padding:2px 8px;border-radius:10px}
   .loginState.ok{color:#2b8a3e;background:#e7f8ea}
+  .runState{font-size:12px;color:#0b7285;background:#e3fafc;padding:2px 8px;border-radius:10px}
+  .start{background:#e6fcf5;color:#0ca678}
+  .stop{background:#fdecec;color:#c0392b}
 </style>
 </head>
 <body>
@@ -59,9 +62,13 @@
         <b style="font-size:14px">账号管理</b>
         <span class="hint" style="margin:0">当前使用：<b id="curAcct" style="color:#111">—</b></span>
         <span style="flex:1"></span>
+        <button class="mini start" id="startAllBtn" onclick="startAllAccts()">▶ 全部启动</button>
+        <button class="mini stop" id="stopAllBtn" onclick="stopAllAccts()">■ 全部停止</button>
+        <button class="mini" id="addAcctBtn" onclick="addAcct()">＋ 新增账号</button>
       </div>
+      <div id="loginTip" style="display:none;margin-top:8px;padding:8px 10px;background:#fff8e1;color:#8a6d00;font-size:13px;border-radius:6px"></div>
       <div id="acctRows"></div>
-      <div class="hint" style="margin:8px 0 0">每个账号有独立的登录档案：首次在「启动自动发货.bat」弹出的窗口里扫码登录一次，之后<b>下次启动会自动登录（免扫码）</b>。点「切换」后重新启动自动发货，打开的就是切换后的账号。商品与发货内容目前为所有账号共用。<b>删除账号会彻底删除该账号的登录档案（不可恢复）</b>。</div>
+      <div class="hint" style="margin:8px 0 0">每个账号都可以单独点「▶ 启动」／「■ 停止」：启动时各开一个自己的控制台窗口，<b>可以同时跑多个账号，互不影响</b>。每个账号是独立沙盒——登录档案、发货去重记录、日志各自分开，进程里只看得见自己这个号，<b>看不到也不会改动其他账号</b>。「＋ 新增账号」会弹出一个独立的浏览器窗口，扫码登录成功后自动记录昵称/ID 并切到该账号；下次启动自动发货打开的还是这个号（免扫码）。点「切换」换回别的号，重启自动发货生效。商品与发货内容目前为所有账号共用。<b>删除账号会彻底删除该账号的登录档案（不可恢复）</b>。</div>
     </div>
     <div class="row" style="align-items:center;margin-bottom:10px">
       <button class="save" onclick="openForm(-1)">＋ 新增商品</button>
@@ -110,13 +117,16 @@
 let state = null;   // /api/state 返回的全部数据
 let draft = null;   // 正在编辑的商品副本
 let editIdx = -1;   // -1 = 新增
-const PAGE_VERSION = 2;   // 与 admin_server.py 的 APP_VERSION 一致
+let loginTimer = null;   // 等待扫码登录时的轮询器
+let loginWatchInit = false;
+const PAGE_VERSION = 4;   // 与 admin_server.py 的 APP_VERSION 一致
 
 async function load(){
   state = await (await fetch('/api/state')).json();
   document.getElementById('staleTip').style.display = (state.version === PAGE_VERSION) ? 'none' : 'block';
   document.getElementById('dryrun').checked = !!state.config.dry_run;
   renderMode(); renderAccounts(); showList();
+  if(!loginWatchInit){ loginWatchInit = true; syncLoginWatch(); }
 }
 function renderMode(){
   const m = document.getElementById('mode');
@@ -177,12 +187,20 @@ function renderAccounts(){
     const login = logged
       ? '<span class="loginState ok">已登录 · 下次免扫码自动登录</span>'
       : '<span class="loginState">未登录（启动自动发货后扫码，之后免扫码）</span>';
+    const run = it.running
+      ? '<span class="runState">运行中' + (it.pid ? ' · PID ' + it.pid : '') +
+        (it.run_since ? ' · ' + esc(it.run_since) : '') + '</span>'
+      : '';
     return `<div class="acctRow">
       <span class="${active?'on':'off'}">${active?'当前使用':'未使用'}</span>
       <b>${esc(title)}</b>
+      ${run}
       <span class="dir">${esc(sub)}</span>
       ${login}
       <span style="flex:1"></span>
+      ${it.running
+        ? `<button class="mini stop" onclick="stopAcct(${i})">■ 停止</button>`
+        : `<button class="mini start" onclick="startAcct(${i})">▶ 启动</button>`}
       <button class="mini" onclick="renameAcct(${i})">改名</button>
       ${active ? '' : `<button class="mini" onclick="switchAcct(${i})">切换</button>`}
       <button class="del" onclick="delAcct(${i})">删除</button>
@@ -195,6 +213,81 @@ async function acctAction(payload){
   await load();
   toast(r.message || '已完成 ✔');
   return true;
+}
+async function addAcct(){
+  if(loginTimer){ toast('登录窗口已经打开了，请先去那个窗口扫码', false); return; }
+  const btn = document.getElementById('addAcctBtn');
+  btn.disabled = true; btn.textContent = '等待扫码中…';
+  try{
+    const r = await (await fetch('/api/account',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'add'})})).json();
+    if(!r.ok){
+      toast(r.error || '打开登录窗口失败', false);
+      btn.disabled = false; btn.textContent = '＋ 新增账号';
+      return;
+    }
+    showLoginTip('已打开登录窗口：请用手机闲鱼/淘宝扫码登录，登录成功后本页会自动更新。');
+    loginTimer = setInterval(pollLogin, 2000);
+  }catch(e){
+    toast('打开登录窗口失败：' + e, false);
+    btn.disabled = false; btn.textContent = '＋ 新增账号';
+  }
+}
+function showLoginTip(text){
+  const t = document.getElementById('loginTip');
+  t.style.display = 'block';
+  t.textContent = text;
+}
+function hideLoginTip(){ document.getElementById('loginTip').style.display = 'none'; }
+async function syncLoginWatch(){
+  // 刷新页面后如果还在等扫码，把提示和轮询接回来
+  let s;
+  try{ s = await (await fetch('/api/login_status')).json(); }catch(e){ return; }
+  if(!s.running) return;
+  const btn = document.getElementById('addAcctBtn');
+  btn.disabled = true; btn.textContent = '等待扫码中…';
+  showLoginTip('等待扫码登录…（已 ' + s.elapsed + ' 秒；不想等就关掉那个浏览器窗口）');
+  if(!loginTimer) loginTimer = setInterval(pollLogin, 2000);
+}
+async function pollLogin(){
+  let s;
+  try{ s = await (await fetch('/api/login_status')).json(); }catch(e){ return; }
+  if(s.running){
+    showLoginTip('等待扫码登录…（已 ' + s.elapsed + ' 秒；不想等就关掉那个浏览器窗口）');
+    return;
+  }
+  clearInterval(loginTimer); loginTimer = null;
+  hideLoginTip();
+  const btn = document.getElementById('addAcctBtn');
+  btn.disabled = false; btn.textContent = '＋ 新增账号';
+  await load();
+  if(s.ok) toast('已添加账号「' + (s.nick || s.account) + '」并切换过去 ✔ 重启自动发货后生效');
+  else toast(s.error || '登录未完成，账号未记录', false);
+}
+async function startAcct(i){
+  const it = ((state.accounts||{}).items||[])[i];
+  if(!it) return;
+  if(!(it.nick || it.uid)){
+    if(!confirm('账号「' + it.name + '」还没登录过。\n\n启动后会弹出一个浏览器窗口，请用手机闲鱼/淘宝扫码登录，登录成功后会自动开始监听发货。\n\n现在启动？')) return;
+  }
+  toast('正在启动「' + (it.nick || it.name) + '」…');
+  await acctAction({action:'start', name: it.name});
+}
+async function stopAcct(i){
+  const it = ((state.accounts||{}).items||[])[i];
+  if(!it) return;
+  await acctAction({action:'stop', name: it.name});
+}
+async function startAllAccts(){
+  const items = ((state.accounts||{}).items||[]);
+  if(!items.length){ toast('还没有账号，先点「＋ 新增账号」', false); return; }
+  if(!confirm('给 ' + items.length + ' 个账号各开一个窗口开始自动发货？\n（已经在运行的会跳过）')) return;
+  await acctAction({action:'start_all'});
+}
+async function stopAllAccts(){
+  const running = ((state.accounts||{}).items||[]).filter(x=>x.running);
+  if(!running.length){ toast('现在没有账号在运行', false); return; }
+  if(!confirm('停止 ' + running.length + ' 个正在运行的自动发货？')) return;
+  await acctAction({action:'stop_all'});
 }
 async function switchAcct(i){
   const it = ((state.accounts||{}).items||[])[i];
@@ -221,6 +314,7 @@ async function delAcct(i){
       ? '\n\n这是当前使用的账号，删除后会自动切换到「' + (others[0].nick || others[0].name) + '」。'
       : '\n\n这是当前唯一的账号，删除后将没有可用账号（下次启动自动发货扫码登录即可）。';
   }
+  if(it.running){ toast('这个账号正在运行中，请先点「■ 停止」再删除', false); return; }
   if(!confirm('删除账号「' + (it.nick || it.name) + '」？' + extra + '\n\n⚠ 该账号的登录档案会被彻底删除，无法恢复（商品与发货内容不受影响）。')) return;
   await acctAction({action:'delete', name: it.name});
 }

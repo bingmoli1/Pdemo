@@ -61,10 +61,13 @@ class BrowserSession:
             pass
 
     def ensure_login(self, timeout_s: int = 0) -> bool:
-        """检测未登录则等待人工扫码；登录态保存在 browser_data/。"""
+        """检测未登录则等待人工扫码；登录态保存在各账号自己的档案目录里。"""
         timeout_s = timeout_s or int(self.cfg.get("login_wait_seconds", 600))
 
         def need_login() -> bool:
+            # 登录态最可靠的判据就是 unb（用户ID）这个 cookie：有就说明登录过了
+            if self.self_user_id():
+                return False
             if "login" in self.page.url:
                 return True
             # 登录表单可能嵌在 iframe 里，逐个 frame 检查
@@ -76,7 +79,7 @@ class BrowserSession:
                     continue
                 if any(k in txt for k in keywords):
                     return True
-            return False
+            return True      # 没有 unb → 视为未登录，继续等扫码
 
         if not need_login():
             return True

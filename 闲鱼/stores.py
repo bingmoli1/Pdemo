@@ -72,13 +72,19 @@ def migrate_product_cards(p: dict, base: Path = BASE) -> dict:
     return p
 
 
-def log_used_card(product_name: str, card: str, base: Path = BASE) -> None:
-    """发货记录：时间、商品、发出的内容（换行压成\\n，过长截断）。"""
+def log_used_card(product_name: str, card: str, base: Path = BASE, account: str = "") -> None:
+    """发货记录：时间、商品、发出的内容（换行压成\\n，过长截断）。
+
+    多个账号同时运行时各写一个文件（避免几个进程抢同一个日志文件），
+    默认账号沿用旧的 used_cards.log。
+    """
     try:
         data_dir = base / "data"
         data_dir.mkdir(exist_ok=True)
         brief = "\\n".join(card.split("\n"))[:300]
-        with (data_dir / "used_cards.log").open("a", encoding="utf-8") as fh:
+        name = "used_cards.log" if (not account or account == DEFAULT_ACCOUNT) \
+            else f"used_cards.{safe_slug(account)}.log"
+        with (data_dir / name).open("a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{product_name}\t{brief}\n")
     except Exception:
         pass
@@ -92,6 +98,12 @@ _BAD_NAME = re.compile(r'[\\/:*?"\'<>|\r\n\t]')
 def clean_account_name(name) -> str:
     s = _BAD_NAME.sub("", str(name or "")).strip().strip(".").strip()
     return s[:24]
+
+
+def safe_slug(name) -> str:
+    """账号名 → 文件名/日志名里能用的片段（中文保留）。"""
+    s = re.sub(r'[\\/:*?"<>|\s]+', "_", str(name or "")).strip("_.")
+    return s[:20] or "account"
 
 
 def account_dir_for(name: str, used=(), base: Path = BASE) -> str:
@@ -173,11 +185,14 @@ def accounts_state(cfg: dict, base: Path = BASE) -> dict:
     return {"current": cur, "items": items}
 
 
-def save_account_identity(account: str, uid: str = "", nick: str = "", base: Path = BASE) -> bool:
+def save_account_identity(account: str, uid: str = "", nick: str = "", base: Path = BASE,
+                          set_current: bool = True) -> bool:
     """把登录后读到的真实闲鱼账号信息（昵称/用户ID）写进 config.json 的账号记录。
 
     找不到对应账号时（比如账号列表被删空、或备注名被改过）会自动按档案目录匹配，
     还是没有就新建一个账号记下来——保证"登录了就能在账号管理里看到这个号"。
+    set_current=False 时只更新这个账号自己的信息，**不改动 current_account / user_data_dir**
+    （多账号并行运行时用，避免一个实例把别的实例/管理页的当前账号改掉）。
     返回是否写入了配置。
     """
     path = Path(base) / "config.json"
@@ -211,8 +226,9 @@ def save_account_identity(account: str, uid: str = "", nick: str = "", base: Pat
             i += 1
         target = {"name": name, "dir": rel}
         accs.append(target)
-        cfg["current_account"] = name
-        cfg["user_data_dir"] = rel
+        if set_current:
+            cfg["current_account"] = name
+            cfg["user_data_dir"] = rel
         created = True
 
     changed = created
@@ -233,6 +249,201 @@ def save_account_identity(account: str, uid: str = "", nick: str = "", base: Pat
         except Exception:
             return False
     return True
+
+
+def register_account_login(rel_dir: str, uid: str = "", nick: str = "", base: Path = BASE) -> dict:
+    """把一次扫码登录的结果登记到账号列表：按档案目录匹配，找不到就新建，并切为当前账号。
+
+    rel_dir：该账号的档案目录（相对项目目录，如 accounts/新账号1）。
+    账号名还是默认的「新账号N」时，会用登录到的昵称替掉，列表里一眼能认出是哪个号。
+    返回 {"ok": bool, "account": 账号名, "created": 是否新建}。
+    """
+    path = Path(base) / "config.json"
+    if not path.exists():
+        return {"ok": False, "account": "", "created": False}
+    try:
+        cfg = json.loads(_read_text(path))
+    except Exception:
+        return {"ok": False, "account": "", "created": False}
+    if not isinstance(cfg.get("accounts"), list):
+        cfg["accounts"] = []
+    ensure_accounts(cfg, base)                 # 顺带自愈老配置
+    accs = cfg["accounts"]
+    rel = str(rel_dir or "").replace("\\", "/").strip("/")
+    if not rel:
+        return {"ok": False, "account": "", "created": False}
+    (Path(base) / rel).mkdir(parents=True, exist_ok=True)
+
+    target = next((a for a in accs if str(a.get("dir") or "").replace("\\", "/").strip("/") == rel), None)
+    created = False
+    if target is None:
+        base_name = clean_account_name(nick or Path(rel).name) or DEFAULT_ACCOUNT
+        nm, i = base_name, 2
+        while any(a.get("name") == nm for a in accs):
+            nm = f"{base_name}{i}"
+            i += 1
+        target = {"name": nm, "dir": rel}
+        accs.append(target)
+        created = True
+    elif nick and str(target.get("name", "")).startswith("新账号") \
+            and not any(a.get("name") == nick for a in accs):
+        target["name"] = clean_account_name(nick) or target["name"]   # 默认名换成真实昵称
+
+    if uid:
+        target["uid"] = str(uid)
+    if nick:
+        target["nick"] = str(nick)
+    if uid or nick:
+        target["last_login"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    cfg["current_account"] = target["name"]
+    cfg["user_data_dir"] = rel
+    try:
+        _atomic_write(path, json.dumps(cfg, ensure_ascii=False, indent=2))
+    except Exception:
+        return {"ok": False, "account": "", "created": False}
+    return {"ok": True, "account": target["name"], "created": created}
+
+
+def sandbox_for(cfg: dict, account: str, base: Path = BASE) -> dict:
+    """把配置收敛成「只属于这一个账号」的沙盒副本，供自动发货进程使用。
+
+    沙盒里：accounts 只剩自己这一条（程序根本看不到其他账号的存在）、
+    user_data_dir/current_account 都指向自己，登录档案、发货去重、日志随之隔离。
+    只改内存里的副本，不会写回 config.json，所以多个账号的实例可以并存、互不干扰。
+    """
+    accs = [a for a in (cfg.get("accounts") or []) if isinstance(a, dict)]
+    key = str(account or "").strip()
+    a = next((x for x in accs if str(x.get("name")) == key), None) \
+        or next((x for x in accs if str(x.get("dir")) == key), None)
+    if a is None:
+        raise KeyError(account)
+    out = dict(cfg)
+    out["accounts"] = [dict(a)]
+    out["current_account"] = str(a.get("name"))
+    out["user_data_dir"] = str(a.get("dir"))
+    out["sandbox"] = True                       # 标记：写回账号信息时不要抢「当前账号」
+    return out
+
+
+# ---------------- 运行中的自动发货实例（多账号并行时用 pid 文件记账） ----------------
+RUN_DIR_NAME = ".running"      # data/.running/<账号>.json
+
+
+def run_dir(base: Path = BASE) -> Path:
+    p = Path(base) / "data" / RUN_DIR_NAME
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def run_pid_path(account: str, base: Path = BASE) -> Path:
+    return run_dir(base) / f"{safe_slug(account)}.json"
+
+
+def pid_alive(pid) -> bool:
+    """进程是否还活着（Windows 用 OpenProcess，避免 os.kill(pid,0) 的坑）。"""
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return code.value == 259                    # STILL_ACTIVE
+                return False
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def write_run_pid(account: str, info: dict, base: Path = BASE) -> None:
+    data = dict(info)
+    data["account"] = account
+    data["pid"] = int(data.get("pid") or os.getpid())
+    data.setdefault("started", time.strftime("%Y-%m-%d %H:%M:%S"))
+    try:
+        _atomic_write(run_pid_path(account, base), json.dumps(data, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
+
+
+def read_run_pid(account: str, base: Path = BASE):
+    """返回还在运行的实例信息；进程已死或文件是别的实例的残留则返回 None（顺手清理）。"""
+    p = run_pid_path(account, base)
+    if not p.exists():
+        return None
+    try:
+        info = json.loads(_read_text(p))
+    except Exception:
+        try:
+            p.unlink()
+        except Exception:
+            pass
+        return None
+    if not isinstance(info, dict) or not pid_alive(info.get("pid")):
+        try:
+            p.unlink()
+        except Exception:
+            pass
+        return None
+    return info
+
+
+def clear_run_pid(account: str, pid=None, base: Path = BASE) -> None:
+    """进程退出时删掉自己的记账文件（只删属于自己的那条，别把新实例的删了）。"""
+    p = run_pid_path(account, base)
+    if not p.exists():
+        return
+    if pid is not None:
+        try:
+            info = json.loads(_read_text(p))
+        except Exception:
+            info = {}
+        if int(info.get("pid") or -1) != int(pid):
+            return
+    try:
+        p.unlink()
+    except Exception:
+        pass
+
+
+def running_accounts(base: Path = BASE) -> dict:
+    """{账号名: 实例信息}（只含确实在跑的）。"""
+    out = {}
+    try:
+        files = sorted(run_dir(base).glob("*.json"))
+    except Exception:
+        return out
+    for f in files:
+        try:
+            info = json.loads(_read_text(f))
+        except Exception:
+            continue
+        if not isinstance(info, dict):
+            continue
+        name = str(info.get("account") or f.stem)
+        if not pid_alive(info.get("pid")):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+            continue
+        out[name] = info
+    return out
 
 
 PRODUCTS_NAME = "products.json"
@@ -295,10 +506,9 @@ class DeliveredStore:
     @staticmethod
     def _filename(account: str) -> str:
         name = str(account or "").strip()
-        if not name or name == "默认账号":
+        if not name or name == DEFAULT_ACCOUNT:
             return "delivered.json"
-        safe = re.sub(r'[\\/:*?"<>|\s]+', "_", name)[:20] or "account"
-        return f"delivered.{safe}.json"
+        return f"delivered.{safe_slug(name)}.json"
 
     def is_new(self, key: str) -> bool:
         return key not in self.items

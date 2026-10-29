@@ -72,6 +72,9 @@ class AutoDeliverer:
         避免"扫码登录了但账号管理里什么都没有"。
         """
         account = str(self.cfg.get("current_account") or "").strip()
+        # 多账号并行（--account 启动的沙盒）时只更新自己这条记录，不动「当前账号」，
+        # 否则一个号启动就会把别的号/管理页的当前账号抢过去
+        set_current = not self.cfg.get("sandbox", False)
         try:
             ident = self.session.self_identity()
         except Exception:
@@ -82,7 +85,7 @@ class AutoDeliverer:
             self.log.warning("还没读到登录信息（可能尚未登录）；扫码登录成功后会自动登记到账号管理")
             return
         self.log.info(f"当前登录账号：{nick or '(未取到昵称)'}（ID {uid or '未知'}）")
-        if save_account_identity(account, uid, nick):
+        if save_account_identity(account, uid, nick, set_current=set_current):
             self.log.info("账号信息已写入账号管理（商品管理页「账号管理」里可以看到/改名/切换）")
 
     # ---------------- 选择器工具 ----------------
@@ -292,7 +295,7 @@ class AutoDeliverer:
         finally:
             if ok:
                 # 内容不消耗、不删除：同一商品每次发货都发同一整段内容
-                log_used_card(name, content)
+                log_used_card(name, content, account=str(self.cfg.get("current_account") or ""))
                 self.delivered.mark(key, {"product": name, "card": content[:200], "source": source})
                 self.log.info(f"✅ 发货成功：商品={name} 会话={key[:40]}（内容已保留，可继续使用）")
             else:

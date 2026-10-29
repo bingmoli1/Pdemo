@@ -4,7 +4,10 @@
   - 增/删/改商品：名字、认单关键词、发货内容（整段多行）、发货话术
   - 每个商品配置多规格（规格名 + 规格关键词 + 该规格的发货内容）
   - 切换 演练模式/正式发货
-  - 账号管理：添加 / 切换 / 删除闲鱼登录账号（每个账号一个独立的浏览器档案目录）
+  - 账号管理：新增（弹窗口扫码登录）/ 改名 / 切换 / 删除闲鱼登录账号
+    （每个账号一个独立的浏览器档案目录）
+  - 每个账号单独「启动 / 停止」自动发货：账号之间互不影响，可以同时跑多个
+    （各自独立的登录档案、发货记录、日志文件，进程里只看得见自己这个账号）
 保存时写回 products.json（发货内容存在各商品的 cards 字段里，一整段文本）；
 账号信息写回 config.json 的 accounts / current_account / user_data_dir。
 改完需重启「启动自动发货.bat」生效。
@@ -21,13 +24,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from stores import (DeliveredStore, account_dir_for, accounts_state, clean_account_name,
-                    content_of, ensure_accounts, load_settings_and_products,
-                    save_account_identity, save_products, save_settings)
+                    clear_run_pid, content_of, ensure_accounts, load_settings_and_products,
+                    pid_alive, running_accounts, save_account_identity, save_products,
+                    save_settings)
 
 BASE = Path(__file__).resolve().parent
 ADMIN_HTML = BASE / "admin.html"
 PORT = 8765
-APP_VERSION = 2  # 与 admin.html 里的 PAGE_VERSION 保持一致；不一致说明有一个旧服务进程还在跑
+APP_VERSION = 4  # 与 admin.html 里的 PAGE_VERSION 保持一致；不一致说明有一个旧服务进程还在跑
+LOGIN_SCRIPT = BASE / "account_login.py"
+RUN_SCRIPT = BASE / "auto_delivery.py"
 
 
 def normalize_products(products):
@@ -73,8 +79,259 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path, onerror=_retry)    # 兼容更老的 Python
 
 
+# ---------------- 新增账号：弹登录窗口，等扫码，自动登记 ----------------
+_LOGIN_JOB = {"proc": None, "dir": "", "started": 0.0, "done": False, "result": None}
+_PY_CACHE = {"exe": None}
+
+
+def _python_has_playwright(exe: str) -> bool:
+    try:
+        r = subprocess.run([exe, "-c", "import playwright"],
+                           capture_output=True, timeout=25)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _candidate_pythons() -> list:
+    """候选解释器：当前解释器 → 常见安装目录 → PATH（跳过 WindowsApps 存根）。"""
+    cands = []
+    if sys.executable:
+        cands.append(sys.executable)
+    home = Path(os.path.expanduser("~"))
+    for base in (home / "AppData" / "Local" / "Programs" / "Python", Path("C:/Python")):
+        try:
+            if not base.exists():
+                continue
+            for d in sorted(base.glob("Python3*"), reverse=True):
+                f = d / "python.exe"
+                if f.exists():
+                    cands.append(str(f))
+        except Exception:
+            pass
+    for p in os.environ.get("PATH", "").split(os.pathsep):
+        if not p or "WindowsApps" in p:
+            continue
+        f = Path(p) / "python.exe"
+        if f.exists():
+            cands.append(str(f))
+    out, seen = [], set()
+    for c in cands:
+        k = str(c).lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(str(c))
+    return out
+
+
+def find_playwright_python() -> str:
+    """找一个装了 playwright 的解释器（PATH 里默认的 python 未必装了）。"""
+    if _PY_CACHE["exe"]:
+        return _PY_CACHE["exe"]
+    for c in _candidate_pythons():
+        if _python_has_playwright(c):
+            _PY_CACHE["exe"] = c
+            return c
+    return ""
+
+
+def start_login_window(rel: str) -> tuple:
+    """打开一个独立浏览器窗口等待扫码登录；登录成功后由子进程写回账号信息。"""
+    prev = _LOGIN_JOB.get("proc")
+    if prev is not None and prev.poll() is None:
+        return False, "已经有一个登录窗口在等待扫码了，请先在那个窗口里完成登录（或关掉它再试）"
+    if not LOGIN_SCRIPT.exists():
+        return False, "缺少 account_login.py，请重新下载完整项目"
+    exe = find_playwright_python()
+    if not exe:
+        return False, ("没找到装了 playwright 的 Python。请在项目目录执行：\n"
+                       "  pip install -r requirements.txt\n  python -m playwright install chromium")
+    try:
+        proc = subprocess.Popen([exe, str(LOGIN_SCRIPT), rel], cwd=str(BASE),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       text=True, encoding="utf-8", errors="replace")
+    except Exception as e:
+        return False, f"打开登录窗口失败：{str(e)[:150]}"
+    _LOGIN_JOB.update({"proc": proc, "dir": rel, "started": time.time(), "done": False, "result": None})
+    return True, ""
+
+
+def _collect_login_job():
+    """子进程结束后读它的输出（最后一行 JSON）作为登录结果。"""
+    j = _LOGIN_JOB
+    proc = j.get("proc")
+    if proc is None or j.get("done") or proc.poll() is None:
+        return
+    try:
+        out, _ = proc.communicate(timeout=10)
+    except Exception:
+        out = ""
+    info = {}
+    for line in reversed((out or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                info = json.loads(line)
+                break
+            except Exception:
+                continue
+    j["result"] = info or {"ok": False, "error": "登录窗口没有返回结果（可能被直接关掉了）"}
+    j["done"] = True
+
+
+def login_status() -> dict:
+    _collect_login_job()
+    j = _LOGIN_JOB
+    proc = j.get("proc")
+    res = j.get("result") or {}
+    return {
+        "running": bool(proc is not None and proc.poll() is None and not j.get("done")),
+        "started": proc is not None,
+        "dir": j.get("dir", ""),
+        "elapsed": int(time.time() - j["started"]) if j.get("started") else 0,
+        "ok": bool(res.get("ok")),
+        "account": res.get("account", ""),
+        "nick": res.get("nick", ""),
+        "uid": res.get("uid", ""),
+        "created": bool(res.get("created")),
+        "error": res.get("error", ""),
+    }
+
+
+# ---------------- 每个账号一个自动发货进程（可多开，互不干扰） ----------------
+_RUN_JOBS = {}   # 账号名 -> {"pid", "started"}；服务重启后靠 data/.running/*.json 恢复
+
+
+def _alive_jobs() -> dict:
+    """{账号名: 实例信息}，只含确实在跑的：内存记录 + pid 文件（死掉的自动清掉）。"""
+    out = {}
+    for name, job in list(_RUN_JOBS.items()):
+        if job and pid_alive(job.get("pid")):
+            out[name] = job
+        else:
+            _RUN_JOBS.pop(name, None)
+    for name, info in running_accounts().items():
+        out.setdefault(name, info)
+    return out
+
+
+def _kill_pid(pid) -> bool:
+    """连进程树一起结束（浏览器窗口是它的子进程，要一起关掉）。"""
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            # 不加 text=True：taskkill 的中文输出是 GBK，按 utf-8 解码会报错
+            r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               capture_output=True, timeout=20)
+            return r.returncode == 0
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 15)
+        return True
+    except Exception:
+        return False
+
+
+def start_run(account: str) -> tuple:
+    """给一个账号单独开一个控制台窗口跑自动发货（多账号可同时跑，各自独立沙盒）。"""
+    cfg = load_settings_and_products()
+    a = next((x for x in (cfg.get("accounts") or []) if x.get("name") == account), None)
+    if a is None:
+        return False, "账号不存在，请刷新页面"
+    jobs = _alive_jobs()
+    if account in jobs:
+        return False, f"「{a.get('nick') or account}」已经在运行了（PID {jobs[account].get('pid')}）"
+    # 同一个登录档案被别的账号实例占着也不能再开（两个 Chromium 抢同一个档案目录会出错）
+    for name, info in jobs.items():
+        if str(info.get("dir") or "") == str(a.get("dir")):
+            return False, f"登录档案 {a.get('dir')} 正被「{name}」占用，一个档案目录同时只能跑一个实例"
+    exe = find_playwright_python()
+    if not exe:
+        return False, ("没找到装了 playwright 的 Python。请在项目目录执行：\n"
+                       "  pip install -r requirements.txt\n  python -m playwright install chromium")
+    try:
+        (BASE / str(a["dir"])).mkdir(parents=True, exist_ok=True)
+        flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+        proc = subprocess.Popen([exe, str(RUN_SCRIPT), "run", "--account", account],
+                                cwd=str(BASE), creationflags=flags)
+    except Exception as e:
+        return False, f"启动失败：{str(e)[:150]}"
+    job = {"pid": proc.pid, "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+           "account": account, "dir": a.get("dir", "")}
+    _RUN_JOBS[account] = job
+    who = a.get("nick") or account
+    tip = "" if (a.get("nick") or a.get("uid")) else "该账号还没登录，弹出的窗口里扫码登录后就会开始监听；"
+    return True, (f"已给「{who}」开了一个独立窗口开始自动发货（PID {proc.pid}）。{tip}"
+                  "关掉那个黑窗口即停止这个账号，不影响其他账号。")
+
+
+def stop_run(account: str) -> tuple:
+    jobs = _alive_jobs()
+    info = jobs.get(account)
+    if not info:
+        clear_run_pid(account)
+        _RUN_JOBS.pop(account, None)
+        return False, "这个账号现在没有在运行"
+    pid = int(info.get("pid") or 0)
+    _kill_pid(pid)
+    _RUN_JOBS.pop(account, None)
+    for _ in range(10):          # 等它真正退出（浏览器子进程也要关掉）
+        if not pid_alive(pid):
+            break
+        time.sleep(0.4)
+    clear_run_pid(account, pid)
+    if pid_alive(pid):
+        return False, f"停止失败：进程 {pid} 还在（可手动关掉那个黑窗口）"
+    return True, f"已停止「{account}」的自动发货（PID {pid}）"
+
+
+def start_all_runs() -> tuple:
+    cfg = load_settings_and_products()
+    accs = cfg.get("accounts") or []
+    if not accs:
+        return False, "还没有账号，先点「＋ 新增账号」扫码登录"
+    jobs = _alive_jobs()
+    started, skipped = [], []
+    for a in accs:
+        if a["name"] in jobs:
+            skipped.append(a.get("nick") or a["name"])
+            continue
+        ok, _ = start_run(a["name"])
+        (started if ok else skipped).append(a.get("nick") or a["name"])
+        time.sleep(0.6)   # 错开启动，避免几个浏览器同时抢资源
+    msg = ""
+    if started:
+        msg += "已启动：" + "、".join(started) + "。每个账号一个窗口，互不影响。"
+    if skipped:
+        msg += ("（跳过：" + "、".join(skipped) + "，已在运行或启动失败）") if msg \
+            else "没有可启动的账号：" + "、".join(skipped)
+    return bool(started), msg or "没有可启动的账号"
+
+
+def stop_all_runs() -> tuple:
+    jobs = _alive_jobs()
+    if not jobs:
+        return False, "现在没有账号在运行"
+    stopped, failed = [], []
+    for name in list(jobs):
+        ok, _ = stop_run(name)
+        (stopped if ok else failed).append(name)
+    msg = "已停止：" + "、".join(stopped) if stopped else ""
+    if failed:
+        msg += ("（没能停止：" + "、".join(failed) + "，请手动关掉对应黑窗口）") if msg \
+            else "没能停止：" + "、".join(failed)
+    return bool(stopped), msg or "没能停止任何账号"
+
+
 def handle_account_action(data: dict):
-    """返回 (ok, message)。action: add / switch / rename / delete / identify。"""
+    """返回 (ok, message)。action: add / switch / rename / delete / start / stop / start_all / stop_all。"""
     action = str(data.get("action") or "")
     cfg = load_settings_and_products()   # 内部已 ensure_accounts
     accs = cfg.get("accounts") or []
@@ -82,16 +339,31 @@ def handle_account_action(data: dict):
 
     if action == "add":
         name = clean_account_name(data.get("name"))
-        if not name:
-            return False, "请填写账号备注名（可用中文、字母、数字）"
-        if any(a["name"] == name for a in accs):
+        if name and any(a["name"] == name for a in accs):
             return False, f"账号「{name}」已存在，换个名字吧"
-        rel = account_dir_for(name, [a["dir"] for a in accs])
+        rel = account_dir_for(name or "新账号", [a["dir"] for a in accs])
         (BASE / rel).mkdir(parents=True, exist_ok=True)
-        accs.append({"name": name, "dir": rel})
-        cfg["current_account"] = name
-        cfg["user_data_dir"] = rel
-        msg = f"已添加账号「{name}」并切换过去。启动自动发货后扫码登录这个号即可。"
+        aname = name or clean_account_name(Path(rel).name) or "新账号"
+        accs.append({"name": aname, "dir": rel})
+        save_settings(cfg)                  # 先落盘（未登录状态），登录成功后由子进程更新
+        ok, msg = start_login_window(rel)   # 再弹出窗口等扫码，登录成功会自动登记并切换过去
+        if not ok:
+            accs.remove(next(a for a in accs if a["dir"] == rel))
+            save_settings(cfg)              # 开窗口失败：撤掉刚加的空账号
+            return False, msg
+        return True, "已打开登录窗口：请在弹出的浏览器里用手机闲鱼/淘宝扫码登录，登录成功后会自动记录账号并切换过去。"
+
+    elif action == "start":
+        return start_run(clean_account_name(data.get("name")))
+
+    elif action == "stop":
+        return stop_run(clean_account_name(data.get("name")))
+
+    elif action == "start_all":
+        return start_all_runs()
+
+    elif action == "stop_all":
+        return stop_all_runs()
 
     elif action == "switch":
         name = clean_account_name(data.get("name"))
@@ -135,6 +407,8 @@ def handle_account_action(data: dict):
         a = next((x for x in accs if x["name"] == name), None)
         if not a:
             return False, "账号不存在，请刷新页面"
+        if name in _alive_jobs():
+            return False, "这个账号正在自动发货运行中，请先点「停止」再删除。"
         was_current = (a["name"] == cur)
         rest = [x for x in accs if x["name"] != a["name"]]
 
@@ -204,8 +478,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/state":
             cfg = load_settings_and_products()
-            payload = {"version": APP_VERSION, "config": cfg, "accounts": accounts_state(cfg)}
+            accounts = accounts_state(cfg)
+            jobs = _alive_jobs()
+            for it in accounts["items"]:
+                job = jobs.get(it["name"]) or {}
+                it["running"] = bool(job)
+                it["pid"] = int(job.get("pid") or 0)
+                it["run_since"] = str(job.get("started") or "")
+            payload = {"version": APP_VERSION, "config": cfg, "accounts": accounts}
             self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            return
+        if path == "/api/login_status":
+            self._send(200, json.dumps(login_status(), ensure_ascii=False).encode("utf-8"))
             return
         self._send(404, b'{"error":"not found"}')
 
