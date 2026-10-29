@@ -1,0 +1,13 @@
+初始 URL: https://seller.goofish.com/#/login?redirectUrl=https%3A%2F%2Fseller.goofish.com%2F%3Fsite%3DCOMMONPRO%23%2Fseller-trade%2Forder-manage
+登录成功，已进入订单页
+已点击「待发货」tab
+订单列表截图: seller_order_list.png
+BODY_LEN: 363
+HAS 去发货: False
+  SEL [class*='order'] -> 17
+  SEL [class*='item'] -> 3
+  SEL [class*='Item'] -> 56
+  SEL tr -> 3
+去发货文本次数: 0
+BUTTONS: 查询 | 重置 | 确认筛选 | 批量导入发货 | 批量延长收货
+DONE

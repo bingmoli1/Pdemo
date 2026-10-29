@@ -1,0 +1,9 @@
+URL: https://seller.goofish.com/#/login?redirectUrl=https%3A%2F%2Fseller.goofish.com%2F%3Fsite%3DCOMMONPRO%23%2Fseller-trade%2Forder-manage 登录? False
+点全部失败: Locator.click: Timeout 15000ms exceeded.
+Call log:
+  - waiting for get_by_text("全部").first
+
+BODY_LEN: 0
+tbody tr 数量: 0
+BUTTONS: 
+DONE
