@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """内部测试: 验证 tkinter 初始化后 zbar 仍能正常解码 + smart_decode 逻辑正确
-smart_decode 直接复用 qr_gui.QRApp 的真实实现, 避免测试副本过期误报
+smart_decode 直接复用 qr_gui 模块级真实实现, 避免测试副本过期误报
 """
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import tkinter as tk
-from qr_gui import QRApp, TkinterDnD
+from qr_gui import TkinterDnD, smart_decode
 
 # 初始化 tkinter（模拟 GUI 运行环境）
 root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
@@ -17,10 +17,6 @@ if TkinterDnD:
 from pyzbar import pyzbar
 from PIL import Image
 import qrcode
-
-def smart_decode(data):
-    return QRApp._smart_decode(data)
-
 
 def make_qr(s):
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H,

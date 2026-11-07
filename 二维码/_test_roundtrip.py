@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 """完整测试: 生成二维码 -> 解码 -> smart_decode, 验证往返正确
-smart_decode 直接复用 qr_gui.QRApp 的真实实现, 避免测试副本过期误报
+smart_decode 直接复用 qr_gui 模块级真实实现, 避免测试副本过期误报
 """
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import qrcode
 from PIL import Image
 from pyzbar.pyzbar import decode as zbar_decode
-from qr_gui import QRApp
-
-smart_decode = QRApp._smart_decode
+from qr_gui import smart_decode
 
 
 def make_qr(s):
