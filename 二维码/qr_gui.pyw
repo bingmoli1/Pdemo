@@ -523,6 +523,184 @@ class Btn(tk.Label):
             self.command()
 
 
+class SlimScrollbar(tk.Canvas):
+    """自绘细圆角滚动条：无箭头、淡轨道、悬停加深加宽、拖动变主题蓝。
+
+    对外接口与 ttk.Scrollbar 一致：可当 Text / Treeview 的
+    yscrollcommand / xscrollcommand 目标，command 指向 xview / yview。
+    内容未溢出时只留白、不画滑块（保留占位，避免布局抖动）。
+    """
+
+    TRACK = "#F0F3F9"          # 极淡轨道
+    THUMB = "#BFCBDF"          # 常态滑块
+    THUMB_HOVER = "#94A5C1"    # 悬停
+    THUMB_DRAG = ACCENT        # 拖动
+
+    def __init__(self, master, orient="vertical", width=12, command=None, **kw):
+        self._vertical = orient == "vertical"
+        self._command = command
+        self._thick = max(8, int(width))
+        self._first, self._last = 0.0, 1.0
+        self._hover = False
+        self._drag = None
+        self._imgs = {}            # 胶囊位图缓存：(长, 宽, 颜色) -> PhotoImage
+        self._min_thumb = max(24, round(self._thick * 2.4))
+        if self._vertical:
+            kw.update(width=self._thick, height=1)
+        else:
+            kw.update(width=1, height=self._thick)
+        kw.setdefault("bg", CARD)
+        kw.setdefault("bd", 0)
+        kw.setdefault("highlightthickness", 0)
+        kw.setdefault("takefocus", 0)
+        super().__init__(master, **kw)
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_motion)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<MouseWheel>", self._on_wheel)
+
+    # --- 兼容 ttk.Scrollbar 的 command / set / get ---
+    def configure(self, cnf=None, **kw):
+        if isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+            cnf = None
+        if "command" in kw:
+            self._command = kw.pop("command")
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+    def set(self, first, last):
+        try:
+            f, l = float(first), float(last)
+        except (TypeError, ValueError):
+            f, l = 0.0, 1.0
+        self._first = min(1.0, max(0.0, f))
+        self._last = min(1.0, max(0.0, l))
+        self._draw()
+
+    def get(self):
+        return (self._first, self._last)
+
+    def _invoke(self, *args):
+        if not self._command:
+            return
+        if isinstance(self._command, str):
+            self.tk.call(self._command, *args)
+        else:
+            self._command(*args)
+
+    # --- 几何与绘制 ---
+    def _metrics(self):
+        """返回 (pad, 轨道长, 滑块长, 滑块起点)；内容未溢出时返回 None。"""
+        length = self.winfo_height() if self._vertical else self.winfo_width()
+        pad = max(2, round(self._thick * 0.18))
+        track = length - 2 * pad
+        span = min(1.0, max(0.0, self._last - self._first))
+        if length < 12 or track <= 0 or span >= 0.999:
+            return None
+        tlen = min(track, max(self._min_thumb, round(track * span)))
+        denom = 1.0 - span
+        pos = pad + (self._first * (track - tlen) / denom if denom > 0 else 0)
+        return pad, track, tlen, pos
+
+    def _capsule_image(self, length, thick, color):
+        """超采样画圆角胶囊再缩小，得到抗锯齿的平滑边缘；按尺寸缓存。"""
+        key = (length, thick, color)
+        if key not in self._imgs:
+            ss = 3
+            if self._vertical:
+                big, small = (thick * ss, length * ss), (thick, length)
+            else:
+                big, small = (length * ss, thick * ss), (length, thick)
+            im = Image.new("RGBA", big, (0, 0, 0, 0))
+            ImageDraw.Draw(im).rounded_rectangle(
+                [0, 0, big[0] - 1, big[1] - 1], radius=min(big) // 2,
+                fill=color)
+            self._imgs[key] = ImageTk.PhotoImage(
+                im.resize(small, Image.LANCZOS), master=self)
+        return self._imgs[key]
+
+    def _band(self, a0, a1, thick, color):
+        length = int(round(a1 - a0))
+        thick = int(round(thick))
+        if length < 1 or thick < 1:
+            return
+        img = self._capsule_image(length, thick, color)
+        c = self._thick / 2.0
+        mid = a0 + (a1 - a0) / 2.0
+        if self._vertical:
+            self.create_image(c, mid, image=img)
+        else:
+            self.create_image(mid, c, image=img)
+
+    def _draw(self):
+        self.delete("all")
+        m = self._metrics()
+        if m is None:
+            return
+        pad, track, tlen, pos = m
+        active = self._hover or self._drag is not None
+        track_w = max(3, round(self._thick * 0.30))
+        thumb_w = max(5, round(self._thick * (0.72 if active else 0.52)))
+        color = (self.THUMB_DRAG if self._drag else
+                 self.THUMB_HOVER if self._hover else self.THUMB)
+        self._band(pad, pad + track, track_w, self.TRACK)
+        self._band(pos, pos + tlen, thumb_w, color)
+
+    # --- 交互 ---
+    def _along(self, e):
+        return e.y if self._vertical else e.x
+
+    def _on_enter(self, _e):
+        self._hover = True
+        self._draw()
+
+    def _on_leave(self, _e):
+        if self._drag:          # 拖出条外仍保持拖动
+            return
+        self._hover = False
+        self._draw()
+
+    def _on_press(self, e):
+        m = self._metrics()
+        if m is None:
+            return
+        pad, track, tlen, pos = m
+        p = self._along(e)
+        if pos <= p <= pos + tlen:
+            self._drag = (p - pos, track, tlen, pad)
+            self._draw()
+        else:
+            self._invoke("scroll", "1" if p > pos + tlen else "-1", "pages")
+
+    def _on_motion(self, e):
+        if not self._drag:
+            return
+        grab, track, tlen, pad = self._drag
+        denom = track - tlen
+        frac = (self._along(e) - grab - pad) / denom if denom > 0 else 0.0
+        self._invoke("moveto", "%.6f" % min(1.0, max(0.0, frac)))
+
+    def _on_release(self, _e):
+        if not self._drag:
+            return
+        self._drag = None
+        x, y = self.winfo_pointerxy()
+        rx, ry = self.winfo_rootx(), self.winfo_rooty()
+        self._hover = (rx <= x < rx + self.winfo_width()
+                       and ry <= y < ry + self.winfo_height())
+        self._draw()
+
+    def _on_wheel(self, e):
+        step = -3 if e.delta > 0 else 3
+        self._invoke("scroll", str(step), "units")
+        return "break"
+
+
 class BatchWindow:
     """批量转码主窗口（程序的唯一窗口，直接以 Tk 根窗口为界面）。
 
@@ -685,8 +863,8 @@ class BatchWindow:
         nb.pack(fill="both", expand=True)
         self.gen_frame = tk.Frame(nb, bg=BG)
         self.dec_frame = tk.Frame(nb, bg=BG)
-        nb.add(self.gen_frame, text="  文本 → 二维码（批量生成）  ")
-        nb.add(self.dec_frame, text="  二维码 → 文本（批量识别）  ")
+        nb.add(self.gen_frame, text="  文本 → 二维码  ")
+        nb.add(self.dec_frame, text="  二维码 → 文本  ")
         self.nb = nb
         self._build_gen(self.gen_frame)
         self._build_dec(self.dec_frame)
@@ -700,9 +878,9 @@ class BatchWindow:
         P = self.P
         wrap = tk.Frame(parent, bg=CARD)
         wrap.pack(fill="both", expand=True, padx=P(10), pady=(0, P(2)))
-        vy = ttk.Scrollbar(wrap, orient="vertical")
+        vy = SlimScrollbar(wrap, orient="vertical", width=P(12))
         vy.pack(side="right", fill="y")
-        vx = ttk.Scrollbar(wrap, orient="horizontal")
+        vx = SlimScrollbar(wrap, orient="horizontal", width=P(12))
         vx.pack(side="bottom", fill="x")
         tv = ttk.Treeview(wrap, columns=cols, show="headings",
                           selectmode="extended",
@@ -784,7 +962,7 @@ class BatchWindow:
         # 输入区最后打包，占满剩余空间并可自由伸缩
         tw = tk.Frame(left, bg=CARD)
         tw.pack(side="top", fill="both", expand=True, padx=P(10))
-        sb = ttk.Scrollbar(tw, orient="vertical")
+        sb = SlimScrollbar(tw, orient="vertical", width=P(12))
         sb.pack(side="right", fill="y")
         self.gen_text = tk.Text(tw, wrap="none", undo=True, width=26, height=8,
                                 font=(FONT, 10), bg="#FFFFFF", fg=TEXT,
