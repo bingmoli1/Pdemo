@@ -4,7 +4,7 @@
 二维码批量转码工具
 
 启动即进入批量转码主界面（唯一窗口），两个页签：
-1. 文本 → 二维码（批量生成）：TXT/CSV/TSV 清单批量生成 PNG
+1. 文本 → 二维码（批量生成）：TXT/CSV/TSV/Excel/Word 清单批量生成 PNG
 2. 二维码 → 文本（批量识别）：多张图片/文件夹批量识别并导出
 """
 
@@ -12,6 +12,9 @@ import csv
 import os
 import re
 import webbrowser
+import zipfile
+import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -61,12 +64,31 @@ SHADOW_M = 8             # 卡片阴影留白
 # ----------------------------------------------------------------------
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff")
 TEXT_EXTS = (".txt", ".csv", ".tsv")
+DOC_EXTS = (".docx", ".xlsx")          # Office 清单（zip + XML，标准库直接解析）
+LIST_EXTS = TEXT_EXTS + DOC_EXTS       # 所有可作为清单导入的格式
 IMG_FILETYPES = [("图像文件", "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff"),
                  ("所有文件", "*.*")]
-TEXT_FILETYPES = [("文本 / CSV 清单", "*.txt *.csv *.tsv"), ("所有文件", "*.*")]
+TEXT_FILETYPES = [("清单文件（文本 / CSV / Excel / Word）",
+                   "*.txt *.csv *.tsv *.xlsx *.docx"),
+                  ("所有文件", "*.*")]
 DEFAULT_OUT_NAME = "二维码批量输出"
 TABLE_HEADERS = {"内容", "文本", "链接", "网址", "content", "text", "link",
                  "url", "data", "value"}
+# Excel 读取整行所有单元格时用于判定「表头行」，避免编号/备注等列被当成二维码内容
+HEADER_WORDS = TABLE_HEADERS | {
+    "编号", "序号", "名称", "备注", "说明", "编码", "二维码", "标题",
+    "id", "no", "num", "index", "name", "remark", "note", "title", "seq",
+    "code", "key", "sn", "qr", "qrcode",
+}
+# 结果导出的保存类型（对话框描述 → 扩展名），顺序即对话框里的顺序
+EXPORT_TYPES = (
+    ("CSV 表格（Excel 可直接打开）", ".csv"),
+    ("Excel 工作簿", ".xlsx"),
+    ("Word 文档", ".docx"),
+    ("文本文件", ".txt"),
+)
+EXPORT_EXT_BY_LABEL = {label: ext for label, ext in EXPORT_TYPES}
+EXPORT_LABEL_BY_EXT = {ext: label for label, ext in EXPORT_TYPES}
 
 
 def _cjk_ratio(s: str) -> float:
@@ -205,23 +227,331 @@ def safe_filename(name: str, maxlen: int = 48) -> str:
     return name
 
 
+S_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+R_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _local(tag) -> str:
+    """取 XML 标签本地名，兼容 transitional / strict 两套 OOXML 命名空间。"""
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _clean_items(items, check_header=True) -> list:
+    """清单统一收尾：去空行；check_header 时首条若是表头则跳过（CSV 行为）。
+
+    Excel 已在行级处理过表头，传 check_header=False，避免重复判定。
+    """
+    out, first = [], True
+    for cell in items:
+        cell = (cell or "").strip()
+        if not cell:
+            continue
+        if check_header and first and cell.lower() in TABLE_HEADERS:
+            first = False
+            continue
+        first = False
+        out.append(cell)
+    return out
+
+
+def parse_docx_lines(path: str) -> list:
+    """Word 文档按「一行一条」读取。
+
+    正文段落 = 一行（段落内的手动换行再拆行）；表格每行取第一个非空
+    单元格，备注列不会被当成二维码内容（Word 规则与 Excel 不同）。
+    只读正文，不读页眉页脚 / 批注。
+    """
+    try:
+        with zipfile.ZipFile(path) as z:
+            try:
+                data = z.read("word/document.xml")
+            except KeyError:
+                raise ValueError("不是有效的 .docx 文件（缺少正文）")
+        root = ET.fromstring(data)
+    except (zipfile.BadZipFile, OSError, ET.ParseError) as e:
+        raise ValueError(f"Word 文档无法读取：{e}")
+
+    def para_lines(p):
+        parts, buf = [], []
+        for el in p.iter():
+            tag = _local(el.tag)
+            if tag == "t" and el.text:
+                buf.append(el.text)
+            elif tag == "tab":
+                buf.append(" ")
+            elif tag in ("br", "cr"):
+                parts.append("".join(buf).strip())
+                buf = []
+        parts.append("".join(buf).strip())
+        return [s for s in parts if s]
+
+    lines = []
+
+    def walk(node):
+        for child in node:
+            tag = _local(child.tag)
+            if tag == "p":
+                lines.extend(para_lines(child))
+            elif tag == "tbl":
+                for tr in child.iter():
+                    if _local(tr.tag) != "tr":
+                        continue
+                    cell = ""
+                    for tc in tr:
+                        if _local(tc.tag) != "tc":
+                            continue
+                        text = " ".join(
+                            s for p in tc.iter() if _local(p.tag) == "p"
+                            for s in para_lines(p)).strip()
+                        if text:
+                            cell = text
+                            break      # 表格行只取第一个非空单元格
+                    if cell:
+                        lines.append(cell)
+            elif tag in ("body", "sdt", "sdtContent"):
+                walk(child)
+
+    walk(root)
+    return lines
+
+
+def parse_xlsx_lines(path: str) -> list:
+    """Excel 取第一个工作表，按行优先读取所有非空单元格，每格 = 一条。
+
+    表头行（首格为表头词，或整行都是常见表头词）整行跳过；空单元格忽略。
+    """
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            shared = []
+            if "xl/sharedStrings.xml" in names:
+                sroot = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                for si in sroot:
+                    shared.append("".join(
+                        t.text or "" for t in si.iter(S_NS + "t")))
+
+            sheet = "xl/worksheets/sheet1.xml"
+            if "xl/workbook.xml" in names:
+                wb = ET.fromstring(z.read("xl/workbook.xml"))
+                sh = next((e for e in wb.iter(S_NS + "sheet")), None)
+                rid = sh.get(R_NS + "id") if sh is not None else None
+                if rid and "xl/_rels/workbook.xml.rels" in names:
+                    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+                    for rel in rels:
+                        if rel.get("Id") == rid:
+                            target = rel.get("Target", "")
+                            if target.startswith("/"):
+                                target = target.lstrip("/")
+                            elif not target.startswith("xl/"):
+                                target = "xl/" + target
+                            if target in names:
+                                sheet = target
+                            break
+            if sheet not in names:
+                cands = sorted(n for n in names
+                               if n.startswith("xl/worksheets/sheet")
+                               and n.endswith(".xml"))
+                if not cands:
+                    raise ValueError("不是有效的 .xlsx 文件（找不到工作表）")
+                sheet = cands[0]
+            sroot = ET.fromstring(z.read(sheet))
+    except (zipfile.BadZipFile, OSError, ET.ParseError, KeyError) as e:
+        raise ValueError(f"Excel 表格无法读取：{e}")
+
+    items = []
+    first_row = True
+    for row in sroot.iter(S_NS + "row"):
+        cells = []
+        for c in row.iter(S_NS + "c"):
+            t = c.get("t")
+            if t == "inlineStr":
+                val = "".join(n.text or "" for n in c.iter(S_NS + "t"))
+            else:
+                v = c.find(S_NS + "v")
+                val = "" if v is None or v.text is None else v.text
+                if t == "s":
+                    try:
+                        val = shared[int(val)]
+                    except (ValueError, IndexError):
+                        val = ""
+            val = val.strip()
+            if val:
+                cells.append(val)      # 所有方框都收，不再只取第一格
+        if not cells:
+            continue
+        if first_row:
+            first_row = False
+            # 表头整行跳过：首格是表头词，或整行都是「编号/内容/备注」这类词
+            if (cells[0].lower() in TABLE_HEADERS
+                    or all(c.lower() in HEADER_WORDS for c in cells)):
+                continue
+        items.extend(cells)
+    return _clean_items(items, check_header=False)
+
+
 def parse_input_file(path: str) -> list:
-    """读取清单：TXT 每行一条；CSV/TSV 取每行首个非空单元格并跳过表头。"""
+    """读取清单：TXT 每行一条；CSV/TSV 每行首格一条；Excel 所有单元格；Word 按行。"""
     ext = os.path.splitext(path)[1].lower()
+    if ext in (".doc", ".xls"):
+        raise ValueError("旧版 .doc/.xls 不支持，请另存为 .docx/.xlsx 或 CSV")
+    if ext == ".docx":
+        return parse_docx_lines(path)
+    if ext == ".xlsx":
+        return parse_xlsx_lines(path)
     with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
         if ext in (".csv", ".tsv"):
-            items, first = [], True
-            for row in csv.reader(f, delimiter="\t" if ext == ".tsv" else ","):
-                cell = next((c.strip() for c in row if c.strip()), "")
-                if not cell:
-                    continue
-                if first and cell.lower() in TABLE_HEADERS:
-                    first = False
-                    continue
-                first = False
-                items.append(cell)
-            return items
+            cells = (next((c.strip() for c in row if c.strip()), "")
+                     for row in csv.reader(
+                         f, delimiter="\t" if ext == ".tsv" else ","))
+            return _clean_items(cells)
         return [ln.strip() for ln in f if ln.strip()]
+
+
+# ----------------------------------------------------------------------
+# 结果导出：Excel 四列表格 / Word、TXT 一行一条纯文本（标准库手写 OOXML，
+# 无需安装 Office / 第三方库）
+# ----------------------------------------------------------------------
+_XML_BAD = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_OOXML_REL_NS = ("http://schemas.openxmlformats.org/officeDocument/2006/"
+                 "relationships")
+_S_NS_URI = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_W_NS_URI = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _xml_text(value) -> str:
+    """转义为 XML 文本，同时剔除 XML 1.0 不允许的控制字符。"""
+    s = "" if value is None else str(value)
+    return escape(_XML_BAD.sub("", s))
+
+
+def _col_letter(n: int) -> str:
+    """列号转 Excel 列名：1 → A，27 → AA。"""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _root_rels(target: str) -> str:
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<Relationships xmlns="{_PKG_REL_NS}">'
+            f'<Relationship Id="rId1" Type="{_OOXML_REL_NS}/officeDocument" '
+            f'Target="{target}"/></Relationships>')
+
+
+def _doc_para(text, bold=False) -> str:
+    """Word 段落：文本内换行转 <w:br/>，空格用 xml:space 保留。"""
+    lines = str(text if text is not None else "").replace(
+        "\r\n", "\n").replace("\r", "\n").split("\n")
+    runs = []
+    for i, line in enumerate(lines):
+        if i:
+            runs.append("<w:r><w:br/></w:r>")
+        rpr = "<w:rPr><w:b/></w:rPr>" if bold else ""
+        runs.append(f'<w:r>{rpr}<w:t xml:space="preserve">'
+                    f'{_xml_text(line)}</w:t></w:r>')
+    return "<w:p>" + "".join(runs) + "</w:p>"
+
+
+def plain_result_lines(rows, col=-1) -> list:
+    """抽取结果行里的正文（默认最后一列），压平换行、跳过空内容。
+
+    Word / TXT 导出的「一行一条识别内容」与「复制全部结果」一致：
+    条目内的换行压成空格，保证一个段落 / 一行就是一条，可直接拖回本工具。
+    """
+    out = []
+    for r in rows:
+        v = r[col] if r and -len(r) <= col < len(r) else ""
+        v = re.sub(r"[\t\r\n]+", " ", "" if v is None else str(v)).strip()
+        if v:
+            out.append(v)
+    return out
+
+
+def write_xlsx(path, header, rows) -> None:
+    """写出单工作表 .xlsx：表头 + 数据，单元格用 inlineStr。"""
+    data = [list(header)] + [list(r) for r in rows]
+    body = []
+    for ri, row in enumerate(data, 1):
+        cells = "".join(
+            f'<c r="{_col_letter(ci)}{ri}" t="inlineStr">'
+            f'<is><t xml:space="preserve">{_xml_text(v)}</t></is></c>'
+            for ci, v in enumerate(row, 1))
+        body.append(f'<row r="{ri}">{cells}</row>')
+    sheet = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+             f'<worksheet xmlns="{_S_NS_URI}"><sheetData>'
+             + "".join(body) + '</sheetData></worksheet>')
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+          'content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxml'
+          'formats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/xl/workbook.xml" ContentType="application/'
+          'vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+          '<Override PartName="/xl/worksheets/sheet1.xml" ContentType='
+          '"application/vnd.openxmlformats-officedocument.spreadsheetml.'
+          'worksheet+xml"/>'
+          '<Override PartName="/xl/styles.xml" ContentType="application/'
+          'vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+          '</Types>')
+    wb = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          f'<workbook xmlns="{_S_NS_URI}" xmlns:r="{_OOXML_REL_NS}">'
+          '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/>'
+          '</sheets></workbook>')
+    wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              f'<Relationships xmlns="{_PKG_REL_NS}">'
+              f'<Relationship Id="rId1" Type="{_OOXML_REL_NS}/worksheet" '
+              'Target="worksheets/sheet1.xml"/>'
+              f'<Relationship Id="rId2" Type="{_OOXML_REL_NS}/styles" '
+              'Target="styles.xml"/></Relationships>')
+    styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              f'<styleSheet xmlns="{_S_NS_URI}">'
+              '<fonts count="1"><font><sz val="11"/>'
+              '<name val="Calibri"/></font></fonts>'
+              '<fills count="2"><fill><patternFill patternType="none"/>'
+              '</fill><fill><patternFill patternType="gray125"/></fill>'
+              '</fills><borders count="1"><border><left/><right/><top/>'
+              '<bottom/><diagonal/></border></borders>'
+              '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" '
+              'fillId="0" borderId="0"/></cellStyleXfs>'
+              '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" '
+              'borderId="0" xfId="0"/></cellXfs>'
+              '<cellStyles count="1"><cellStyle name="Normal" xfId="0" '
+              'builtinId="0"/></cellStyles></styleSheet>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", _root_rels("xl/workbook.xml"))
+        z.writestr("xl/workbook.xml", wb)
+        z.writestr("xl/_rels/workbook.xml.rels", wbrels)
+        z.writestr("xl/styles.xml", styles)
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+
+
+def write_docx_lines(path, lines) -> None:
+    """写出 .docx：一段（一行）一条识别内容，无标题、无表格。"""
+    body = "".join(_doc_para(line) for line in lines)
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           f'<w:document xmlns:w="{_W_NS_URI}"><w:body>'
+           + body
+           + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+           '</w:sectPr></w:body></w:document>')
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+          'content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxml'
+          'formats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/word/document.xml" ContentType="application/'
+          'vnd.openxmlformats-officedocument.wordprocessingml.document.'
+          'main+xml"/></Types>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", _root_rels("word/document.xml"))
+        z.writestr("word/document.xml", doc)
 
 
 def parse_drop_paths(widget, data: str) -> list:
@@ -714,7 +1044,7 @@ class BatchWindow:
 
     def __init__(self, root):
         self.win = win = root
-        win.title("二维码工具 - 批量转码")
+        win.title("二维码工具")
         win.configure(bg=BG)
         self.S = max(1.0, win.winfo_fpixels("1i") / 96.0)
         self.ui = UI(win, self.S)
@@ -870,7 +1200,7 @@ class BatchWindow:
         self._build_dec(self.dec_frame)
         foot = tk.Frame(outer, bg=BG)
         foot.pack(fill="x", pady=(P(8), 0))
-        tk.Label(foot, text="提示：可直接把 TXT/CSV 清单、二维码图片或文件夹拖入本窗口",
+        tk.Label(foot, text="提示：可直接把 TXT/CSV/Excel/Word 清单、二维码图片或文件夹拖入本窗口",
                  bg=BG, fg=MUTED, font=(FONT, 9), anchor="w",
                  highlightthickness=0).pack(side="left")
 
@@ -923,14 +1253,14 @@ class BatchWindow:
                  highlightthickness=0).pack(fill="x", padx=P(10), pady=(P(5), 0))
         row = tk.Frame(fixed, bg=CARD)
         row.pack(fill="x", padx=P(10), pady=P(6))
-        Btn(row, self.ui, "导入 TXT/CSV", self.import_file, pt=9).pack(side="left")
+        Btn(row, self.ui, "导入文件", self.import_file, pt=9).pack(side="left")
         Btn(row, self.ui, "粘贴", self.paste_lines, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(row, self.ui, "清空", self.clear_lines, pt=9).pack(side="left", padx=(P(5), 0))
 
-        # ===== 左：输出位置设置 =====
+        # ===== 左：输出位置 =====
         tk.Frame(fixed, bg=DIVIDER, height=1, highlightthickness=0,
                  bd=0).pack(fill="x", padx=P(10), pady=(0, P(8)))
-        self._label(fixed, "输出位置设置", bold=True, anchor="w").pack(fill="x", padx=P(10))
+        self._label(fixed, "输出位置", bold=True, anchor="w").pack(fill="x", padx=P(10))
         drow = tk.Frame(fixed, bg=CARD)
         drow.pack(fill="x", padx=P(10), pady=(P(6), 0))
         self.gen_dir_var = tk.StringVar(value=default_out_dir())
@@ -941,12 +1271,12 @@ class BatchWindow:
         orow = tk.Frame(fixed, bg=CARD)
         orow.pack(fill="x", padx=P(10), pady=(P(8), 0))
         self._label(orow, "命名", muted=True, side="left")
-        self.gen_name_var = tk.StringVar(value="序号命名")
+        self.gen_name_var = tk.StringVar(value="内容命名")
         ttk.Combobox(orow, textvariable=self.gen_name_var, state="readonly",
-                     values=["序号命名", "内容命名"], width=9,
+                     values=["内容命名", "序号命名"], width=9,
                      font=(FONT, 9)).pack(side="left", padx=P(5))
         self._label(orow, "前缀", muted=True).pack(side="left", padx=(P(8), 0))
-        self.gen_prefix_var = tk.StringVar(value="qr_")
+        self.gen_prefix_var = tk.StringVar(value="")
         ttk.Entry(orow, textvariable=self.gen_prefix_var, width=7,
                   font=(FONT, 9)).pack(side="left", padx=(P(4), 0))
 
@@ -995,7 +1325,6 @@ class BatchWindow:
         self.gen_cancel_btn = Btn(row, self.ui, "取消", self.cancel_job)
         self.gen_cancel_btn.pack(side="left", padx=(P(6), 0))
         Btn(row, self.ui, "打开目录", self.open_out_dir).pack(side="left", padx=(P(6), 0))
-        Btn(row, self.ui, "导出清单", self.export_gen).pack(side="left", padx=(P(6), 0))
         self.gen_cancel_btn.set_enabled(False)
 
     def _build_dec(self, parent):
@@ -1148,7 +1477,7 @@ class BatchWindow:
         if self._running:
             return
         paths = filedialog.askopenfilenames(
-            parent=self.win, title="导入文本清单（可多选）",
+            parent=self.win, title="导入文件（可多选）",
             filetypes=TEXT_FILETYPES)
         if not paths:
             return
@@ -1275,12 +1604,6 @@ class BatchWindow:
             self._finish("gen")
         else:
             self._job = self.win.after(1, self._gen_step)
-
-    def export_gen(self):
-        self.export_rows(
-            "批量生成清单", ("序号", "内容", "状态", "输出文件"),
-            [(r["idx"], r["content"], r["status"], r["file"])
-             for r in self.gen_rows], "gen")
 
     # ------------------------------------------------------------------
     # 页签二：二维码 → 文本
@@ -1442,35 +1765,59 @@ class BatchWindow:
     # ------------------------------------------------------------------
     # 导出 / 拖拽
     # ------------------------------------------------------------------
-    def export_rows(self, title, header, rows, kind):
+    def export_rows(self, title, header, rows, kind, text_col=-1):
+        """表格格式（CSV/Excel）写四列；Word/TXT 只写正文列，一行一条。"""
         if not rows:
             messagebox.showwarning("提示", "还没有可导出的结果", parent=self.win)
             return
+        # -typevariable 让原生保存对话框把「保存类型」的下拉选择写进变量，
+        # 避免对话框没自动补扩展名时，选了 Word/Excel 却兜底存成 CSV。
+        type_var = tk.StringVar(value="")
         path = filedialog.asksaveasfilename(
-            parent=self.win, title="导出结果", defaultextension=".csv",
-            initialfile=title + ".csv",
-            filetypes=[("CSV 表格（Excel 可直接打开）", "*.csv"),
-                       ("文本文件", "*.txt")])
+            parent=self.win, title="导出结果", initialfile=title,
+            filetypes=[(label, "*" + ext) for label, ext in EXPORT_TYPES],
+            typevariable=type_var)
         if not path:
             return
+        chosen = EXPORT_EXT_BY_LABEL.get(type_var.get())
+        ext = chosen or os.path.splitext(path)[1].lower()
+        if ext not in EXPORT_LABEL_BY_EXT:
+            ext = ".csv"
+        # 文件名扩展名始终与实际写出的格式一致
+        path = os.path.splitext(path)[0] + ext
+        # Word / TXT 是纯文本清单：只保留识别内容，一行一条（跳过未识别的）
+        plain = (plain_result_lines(rows, text_col)
+                 if ext in (".docx", ".txt") else None)
+        if plain is not None and not plain:
+            messagebox.showwarning("提示", "没有可导出的识别内容", parent=self.win)
+            return
         try:
-            is_csv = os.path.splitext(path)[1].lower() == ".csv"
-            with open(path, "w", encoding="utf-8-sig" if is_csv else "utf-8",
-                      newline="") as f:
-                if is_csv:
-                    writer = csv.writer(f)
-                    writer.writerow(header)
-                    writer.writerows(rows)
-                else:
-                    clean = lambda v: str(v).replace("\t", " ").replace("\r", " ").replace("\n", " ")
-                    f.write("\t".join(header) + "\n")
-                    for r in rows:
-                        f.write("\t".join(clean(v) for v in r) + "\n")
-        except OSError as e:
+            if ext == ".xlsx":
+                write_xlsx(path, header, rows)
+            elif ext == ".docx":
+                write_docx_lines(path, plain)
+            else:
+                with open(path, "w",
+                          encoding="utf-8-sig" if ext == ".csv" else "utf-8",
+                          newline="") as f:
+                    if ext == ".csv":
+                        writer = csv.writer(f)
+                        writer.writerow(header)
+                        writer.writerows(rows)
+                    else:
+                        f.write("\n".join(plain) + "\n")
+        except (OSError, ValueError) as e:
             messagebox.showerror("导出失败", str(e), parent=self.win)
             return
-        self._status(kind, f"已导出 {len(rows)} 条：{path}")
-        messagebox.showinfo("导出完成", f"已导出 {len(rows)} 条记录：\n{path}",
+        fmt = f"{EXPORT_LABEL_BY_EXT[ext]}（{ext}）"
+        if plain is None:
+            count, note = f"{len(rows)} 条记录", "含四列表格"
+        else:
+            count = f"{len(plain)} 条识别内容"
+            note = "一行一条，未识别的已跳过"
+        self._status(kind, f"已导出 {count}（{fmt}）：{path}")
+        messagebox.showinfo("导出完成",
+                            f"已导出 {count}\n格式：{fmt}\n{note}\n{path}",
                             parent=self.win)
 
     def on_drop(self, event):
@@ -1479,7 +1826,7 @@ class BatchWindow:
                                 parent=self.win)
             return
         paths = parse_drop_paths(self.win, event.data)
-        docs = [p for p in paths if os.path.splitext(p)[1].lower() in TEXT_EXTS]
+        docs = [p for p in paths if os.path.splitext(p)[1].lower() in LIST_EXTS]
         if docs:
             self.nb.select(self.gen_frame)
             oks, total = self._import_paths(docs)
