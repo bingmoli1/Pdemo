@@ -1335,7 +1335,9 @@ class BatchWindow:
     def _build_dec(self, parent):
         P = self.P
         panel = self._panel(parent)
-        panel.pack(fill="both", expand=True, padx=P(8), pady=P(8))
+        # 左边不留外边距：识别页白框左边缘与「文本 → 二维码」页签、
+        # 生成页左卡片对齐；右侧仍保留原留白。
+        panel.pack(fill="both", expand=True, padx=(0, P(8)), pady=P(8))
 
         bar = tk.Frame(panel, bg=CARD)
         bar.pack(fill="x", padx=P(10), pady=(P(10), P(6)))
