@@ -9,6 +9,7 @@
 """
 
 import csv
+import json
 import os
 import re
 import webbrowser
@@ -89,6 +90,83 @@ EXPORT_TYPES = (
 )
 EXPORT_EXT_BY_LABEL = {label: ext for label, ext in EXPORT_TYPES}
 EXPORT_LABEL_BY_EXT = {ext: label for label, ext in EXPORT_TYPES}
+
+# ----------------------------------------------------------------------
+# 上次设置：%APPDATA%\二维码工具\settings.json
+#   纯文本 JSON，可直接查看 / 修改 / 删除（删掉即恢复默认）；不放在 exe 目录，
+#   项目目录保持干净。只记界面设置，不记输入内容和识别结果。
+# ----------------------------------------------------------------------
+SETTING_DEFAULTS = {
+    "version": 1,
+    "gen_dir": "",              # 空 = 桌面 / 二维码批量输出
+    "gen_name": "内容命名",
+    "gen_prefix": "",
+    "gen_start": "1",
+    "dec_rec": True,
+    "export_ext": ".csv",
+    "tab": 0,
+}
+
+
+def settings_path() -> str:
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "二维码工具", "settings.json")
+
+
+def load_settings() -> dict:
+    """读取上次设置；文件不存在或内容损坏时安静地用默认值。"""
+    cfg = dict(SETTING_DEFAULTS)
+    try:
+        with open(settings_path(), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for key in cfg:
+                if key in raw:
+                    cfg[key] = raw[key]
+    except (OSError, ValueError, TypeError):
+        return dict(SETTING_DEFAULTS)
+    # 清洗：手工改坏配置也不会让界面崩
+    if (not isinstance(cfg["gen_dir"], str)
+            or (cfg["gen_dir"] and not os.path.isabs(cfg["gen_dir"]))):
+        cfg["gen_dir"] = ""
+    if cfg["gen_name"] not in ("内容命名", "序号命名"):
+        cfg["gen_name"] = SETTING_DEFAULTS["gen_name"]
+    if not isinstance(cfg["gen_prefix"], str):
+        cfg["gen_prefix"] = ""
+    cfg["gen_prefix"] = cfg["gen_prefix"][:64]
+    if (not str(cfg["gen_start"]).isdigit()
+            or int(cfg["gen_start"]) > 999999):
+        cfg["gen_start"] = "1"
+    cfg["gen_start"] = str(cfg["gen_start"])
+    cfg["dec_rec"] = bool(cfg["dec_rec"])
+    if cfg["export_ext"] not in EXPORT_LABEL_BY_EXT:
+        cfg["export_ext"] = ".csv"
+    try:
+        cfg["tab"] = int(cfg["tab"])
+    except (TypeError, ValueError):
+        cfg["tab"] = 0
+    if cfg["tab"] not in (0, 1):
+        cfg["tab"] = 0
+    return cfg
+
+
+def save_settings(values: dict) -> bool:
+    """原子写入；只读环境 / 权限受限时静默跳过，绝不影响使用。"""
+    path = settings_path()
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(values, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except (OSError, ValueError, TypeError):
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return False
 
 
 def _cjk_ratio(s: str) -> float:
@@ -1049,6 +1127,10 @@ class BatchWindow:
         self.S = max(1.0, win.winfo_fpixels("1i") / 96.0)
         self.ui = UI(win, self.S)
         self.P = self.ui.P
+        self.cfg = load_settings()
+        self._last_export = self.cfg["export_ext"]
+        self._save_job = None
+        self._save_ready = False      # 构建期间不触发保存
         setup_style(win, self.S)
         set_app_icon(win)
         win.minsize(self.P(780), self.P(540))
@@ -1203,6 +1285,17 @@ class BatchWindow:
         self.nb = nb
         self._build_gen(self.gen_frame)
         self._build_dec(self.dec_frame)
+        # 设置变化后延迟落盘；当前页签也一起记住
+        for var in (self.gen_dir_var, self.gen_name_var, self.gen_prefix_var,
+                    self.gen_start_var, self.dec_rec_var):
+            var.trace_add("write", self._schedule_save)
+        nb.bind("<<NotebookTabChanged>>", self._schedule_save)
+        if self.cfg["tab"] == 1:
+            try:
+                nb.select(1)
+            except tk.TclError:
+                pass
+        self._save_ready = True
         foot = tk.Frame(outer, bg=BG)
         foot.pack(fill="x", pady=(P(8), 0))
         tk.Label(foot, text="提示：可直接把 TXT/CSV/Excel/Word 清单、二维码图片或文件夹拖入本窗口",
@@ -1268,7 +1361,8 @@ class BatchWindow:
         self._label(fixed, "输出位置", bold=True, anchor="w").pack(fill="x", padx=P(10))
         drow = tk.Frame(fixed, bg=CARD)
         drow.pack(fill="x", padx=P(10), pady=(P(6), 0))
-        self.gen_dir_var = tk.StringVar(value=default_out_dir())
+        self.gen_dir_var = tk.StringVar(
+            value=self.cfg["gen_dir"] or default_out_dir())
         ttk.Entry(drow, textvariable=self.gen_dir_var, font=(FONT, 9)).pack(
             side="left", fill="x", expand=True, padx=(0, P(5)))
         Btn(drow, self.ui, "浏览", self.choose_dir, pt=9).pack(side="left")
@@ -1276,19 +1370,19 @@ class BatchWindow:
         orow = tk.Frame(fixed, bg=CARD)
         orow.pack(fill="x", padx=P(10), pady=(P(8), 0))
         self._label(orow, "命名", muted=True, side="left")
-        self.gen_name_var = tk.StringVar(value="内容命名")
+        self.gen_name_var = tk.StringVar(value=self.cfg["gen_name"])
         ttk.Combobox(orow, textvariable=self.gen_name_var, state="readonly",
                      values=["内容命名", "序号命名"], width=9,
                      font=(FONT, 9)).pack(side="left", padx=P(5))
         self._label(orow, "前缀", muted=True).pack(side="left", padx=(P(8), 0))
-        self.gen_prefix_var = tk.StringVar(value="")
+        self.gen_prefix_var = tk.StringVar(value=self.cfg["gen_prefix"])
         ttk.Entry(orow, textvariable=self.gen_prefix_var, width=7,
                   font=(FONT, 9)).pack(side="left", padx=(P(4), 0))
 
         nrow = tk.Frame(fixed, bg=CARD)
         nrow.pack(fill="x", padx=P(10), pady=(P(8), P(12)))
         self._label(nrow, "起始序号", muted=True, side="left")
-        self.gen_start_var = tk.StringVar(value="1")
+        self.gen_start_var = tk.StringVar(value=self.cfg["gen_start"])
         ttk.Entry(nrow, textvariable=self.gen_start_var, width=6,
                   font=(FONT, 9)).pack(side="left", padx=(P(5), 0))
         tk.Label(nrow, text="PNG · H 级纠错", bg=CARD, fg=MUTED,
@@ -1345,7 +1439,7 @@ class BatchWindow:
         Btn(bar, self.ui, "添加文件夹", self.add_folder, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(bar, self.ui, "移除选中", self.remove_selected, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(bar, self.ui, "清空", self.clear_paths, pt=9).pack(side="left", padx=(P(5), 0))
-        self.dec_rec_var = tk.BooleanVar(value=True)
+        self.dec_rec_var = tk.BooleanVar(value=self.cfg["dec_rec"])
         ttk.Checkbutton(bar, text="包含子文件夹", variable=self.dec_rec_var,
                         style="Tick.TCheckbutton").pack(side="left", padx=(P(12), 0))
         self.dec_count_var = tk.StringVar(value="共 0 张图片")
@@ -1422,9 +1516,56 @@ class BatchWindow:
         self._cancel = True
         self._status(self._kind, "正在取消…")
 
+    # ------------------------------------------------------------------
+    # 上次设置
+    # ------------------------------------------------------------------
+    def _cur_tab(self):
+        try:
+            return max(0, min(1, self.nb.index(self.nb.select())))
+        except (tk.TclError, AttributeError):
+            return 0
+
+    def _collect_settings(self):
+        return {
+            "version": 1,
+            "gen_dir": self.gen_dir_var.get(),
+            "gen_name": self.gen_name_var.get(),
+            "gen_prefix": self.gen_prefix_var.get(),
+            "gen_start": self.gen_start_var.get(),
+            "dec_rec": bool(self.dec_rec_var.get()),
+            "export_ext": self._last_export,
+            "tab": self._cur_tab(),
+        }
+
+    def _schedule_save(self, *_args):
+        """设置变化后合并 400ms 内的多次改动，避免逐字写盘。"""
+        if not self._save_ready:
+            return
+        if self._save_job is not None:
+            try:
+                self.win.after_cancel(self._save_job)
+            except tk.TclError:
+                pass
+        self._save_job = self.win.after(400, self._save_now)
+
+    def _save_now(self):
+        self._save_job = None
+        try:
+            save_settings(self._collect_settings())
+        except Exception:
+            pass
+
     def close(self):
         """关闭唯一主窗口 = 退出程序。"""
         self._cancel = True
+        self._save_ready = False
+        if self._save_job is not None:
+            try:
+                self.win.after_cancel(self._save_job)
+            except tk.TclError:
+                pass
+            self._save_job = None
+        self._save_now()
         if self._job is not None:
             try:
                 self.win.after_cancel(self._job)
@@ -1779,7 +1920,9 @@ class BatchWindow:
             return
         # -typevariable 让原生保存对话框把「保存类型」的下拉选择写进变量，
         # 避免对话框没自动补扩展名时，选了 Word/Excel 却兜底存成 CSV。
-        type_var = tk.StringVar(value="")
+        type_var = tk.StringVar(
+            value=EXPORT_LABEL_BY_EXT.get(self._last_export,
+                                          EXPORT_TYPES[0][0]))
         path = filedialog.asksaveasfilename(
             parent=self.win, title="导出结果", initialfile=title,
             filetypes=[(label, "*" + ext) for label, ext in EXPORT_TYPES],
@@ -1816,6 +1959,8 @@ class BatchWindow:
         except (OSError, ValueError) as e:
             messagebox.showerror("导出失败", str(e), parent=self.win)
             return
+        self._last_export = ext
+        self._schedule_save()
         fmt = f"{EXPORT_LABEL_BY_EXT[ext]}（{ext}）"
         if plain is None:
             count, note = f"{len(rows)} 条记录", "含四列表格"
