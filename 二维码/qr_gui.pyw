@@ -610,6 +610,57 @@ class BatchWindow:
         st.configure("TCheckbutton", background=CARD, foreground=TEXT,
                      font=(FONT, 9))
         st.map("TCheckbutton", background=[("active", CARD)])
+        self._init_tick_checkbutton(st)
+
+    def _init_tick_checkbutton(self, st):
+        """clam 主题复选框选中时画的是叉号，换成蓝底白色对勾。"""
+        size = max(14, self.P(16))
+        s = size * 2
+
+        def make(fill, outline, tick):
+            im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+            d = ImageDraw.Draw(im)
+            d.rounded_rectangle([2, 2, s - 3, s - 3], radius=s // 8,
+                                fill=fill, outline=outline,
+                                width=max(2, s // 16))
+            if tick:
+                d.line([(s * 0.28, s * 0.50), (s * 0.44, s * 0.66),
+                        (s * 0.74, s * 0.28)],
+                       fill="#FFFFFF", width=max(3, s // 10), joint="curve")
+            return ImageTk.PhotoImage(im.resize((size, size), Image.LANCZOS),
+                                     master=self.win)
+
+        off = make(CARD, "#A9B4C8", False)
+        hover = make("#F2F6FE", ACCENT, False)
+        on = make(ACCENT, ACCENT, True)
+        on_hover = make(ACCENT_HOVER, ACCENT_HOVER, True)
+        # 必须持有引用，否则 PhotoImage 被 GC 后 Tcl 侧图片失效
+        self._tick_images = (off, hover, on, on_hover)
+
+        if "Tick.indicator" not in st.element_names():
+            # 状态规则按「更具体」优先：悬停时同时带 selected+active，
+            # 若把 ("active", hover) 放前面会先命中空框、把对勾盖掉。
+            st.element_create("Tick.indicator", "image", off,
+                              ("selected", "active", on_hover),
+                              ("selected", on),
+                              ("active", hover),
+                              width=size, sticky="")
+        layout = st.layout("TCheckbutton")
+
+        def replace(node):
+            out = []
+            for name, opts in node:
+                o = dict(opts)
+                if "children" in o:
+                    o["children"] = replace(o["children"])
+                out.append(("Tick.indicator" if name == "Checkbutton.indicator"
+                            else name, o))
+            return out
+
+        st.layout("Tick.TCheckbutton", replace(layout))
+        st.configure("Tick.TCheckbutton", background=CARD, foreground=TEXT,
+                     font=(FONT, 9), padding=2)
+        st.map("Tick.TCheckbutton", background=[("active", CARD)])
 
     @staticmethod
     def _panel(parent):
@@ -782,7 +833,7 @@ class BatchWindow:
         Btn(bar, self.ui, "清空", self.clear_paths, pt=9).pack(side="left", padx=(P(5), 0))
         self.dec_rec_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text="包含子文件夹", variable=self.dec_rec_var,
-                        style="TCheckbutton").pack(side="left", padx=(P(12), 0))
+                        style="Tick.TCheckbutton").pack(side="left", padx=(P(12), 0))
         self.dec_count_var = tk.StringVar(value="共 0 张图片")
         tk.Label(bar, textvariable=self.dec_count_var, bg=CARD, fg=MUTED,
                  font=(FONT, 9), highlightthickness=0).pack(side="right")

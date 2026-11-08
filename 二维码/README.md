@@ -9,13 +9,11 @@
 - 默认输出目录为 `桌面/二维码批量输出`，可随时改；把 TXT/CSV 清单、二维码图片或文件夹拖入窗口，会自动分派到对应页签。
 - 编解码统一由模块级 `make_qr_image` / `decode_qr_image` / `smart_decode` 实现，批量生成与批量识别结果一致。
 
-测试
+验证
 
-> 依赖装在系统 Python 3.14（`C:/Users/12416/AppData/Local/Programs/Python/Python314/python.exe`），PATH 上的 3.13 无依赖。
+> 回归测试脚本（`_test_*.py`）已按清理要求删除，需要时可从回收站恢复。
 
-```bash
-python _test_roundtrip.py && python _test_internal.py && python _test_batch.py && python _test_startup.py
-```
+双击 `二维码工具.exe` 检查启动即可；改动源码后按下方命令重新打包。
 
 打包
 
@@ -34,7 +32,7 @@ pyinstaller --noconfirm --distpath . 二维码工具.spec
 说明：
 - `-F` 单文件、`-w` 窗口模式、`--icon qr_icon.ico` 内嵌图标、`--collect-all pyzbar` 收集解码所需的 zbar DLL。
 - `--noupx` 对应 `.spec` 中的 `upx=False`，确保不被意外压缩（功能不变，体积保持原始大小）。
-- 依赖：Python 环境中需安装 `qrcode`、`pyzbar`、`Pillow(PIL)`、`tkinterdnd2`、`PyInstaller`。
+- 依赖装在系统 Python 3.14（`C:/Users/12416/AppData/Local/Programs/Python/Python314/python.exe`），PATH 上的 3.13 无依赖；需安装 `qrcode`、`pyzbar`、`Pillow(PIL)`、`tkinterdnd2`、`PyInstaller`。
 - 产物 `二维码工具.exe` 为自包含单文件，复制到任意 Windows 64 位电脑双击即可运行，无需安装运行库。
 
  
