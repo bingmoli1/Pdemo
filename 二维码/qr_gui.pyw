@@ -1093,11 +1093,16 @@ class BatchWindow:
             st.theme_use("clam")
         except tk.TclError:
             pass
-        st.configure("TNotebook", background=BG, borderwidth=0)
+        # clam 主题的 Notebook.client / Notebook.tab 会画一圈 #9E9A91 深灰描边，
+        # 设 borderwidth=0 也去不掉；把两个元素的边框三色都改成窗口底色，
+        # 视觉上彻底去掉这圈把页面围起来的「黑框」。
+        st.configure("TNotebook", background=BG, borderwidth=0,
+                     bordercolor=BG, lightcolor=BG, darkcolor=BG)
         # 当前页签更大更醒目（大字号加粗 + 更多留白 + 主题色），
         # 未选中的页签收敛成小号淡色，避免「反客为主」。
         st.configure("TNotebook.Tab", background="#E9EEF7", foreground=MUTED,
-                     padding=(P(12), P(4)), font=(FONT, 9))
+                     padding=(P(12), P(4)), font=(FONT, 9),
+                     bordercolor=BG, lightcolor=BG, darkcolor=BG)
         st.map("TNotebook.Tab",
                background=[("selected", CARD), ("active", "#DDE8FA")],
                foreground=[("selected", ACCENT), ("active", TEXT)],
