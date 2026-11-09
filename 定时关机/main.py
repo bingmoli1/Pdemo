@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import ctypes
-import winreg
 
 
 # ======================================================
@@ -54,6 +53,29 @@ def another_instance_running():
     return ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
 
 
+# ======================================================
+# 任务持久化路径：
+# %APPDATA%\ScheduledShutdown\shutdown_task.json
+# 只写当前用户自己的目录，不需要管理员权限，也不写注册表
+# ======================================================
+def get_save_file():
+
+    base = os.environ.get("APPDATA")
+
+    if not base:
+        base = os.path.join(
+            os.path.expanduser("~"),
+            "AppData",
+            "Roaming"
+        )
+
+    return os.path.join(
+        base,
+        "ScheduledShutdown",
+        "shutdown_task.json"
+    )
+
+
 class ShutdownTimerApp:
 
     # =========================
@@ -74,16 +96,31 @@ class ShutdownTimerApp:
     OK_GREEN = "#16A34A"      # 安全状态
     OK_RED = "#DC2626"        # 倒计时中状态
 
+    # 下拉框专用
+    FIELD_BORDER = "#CBD5E1"  # 常态描边
+    FIELD_HOVER = "#93C5FD"   # 悬停描边
+    FIELD_FOCUS_BG = "#F7FBFF"  # 聚焦底色
+    FIELD_DISABLED_BG = "#F8FAFC"
+    ARROW = "#94A3B8"         # 箭头
+    ARROW_ACTIVE = "#3B82F6"  # 悬停/聚焦箭头
+    SELECT_BG = "#DBEAFE"     # 文本选中底色
+
     # =========================
-    # 任务持久化：Windows 注册表（不在目录里生成任何文件）
+    # 任务持久化：AppData 下的 json 文件
+    # 不在 exe 所在目录生成任何文件，也不写注册表
+    # 用类属性是为了方便检验脚本替换成临时路径
     # =========================
-    REG_PATH = "Software\\ScheduledShutdown"
-    REG_VALUE = "target_time"
+    SAVE_FILE = get_save_file()
 
     # shutdown /t 的上限（秒）：文档写的是 10 年（315360000），
     # 但实测部分 Win11 版本对该值返回错误 87，
     # 这里按实测可用的 30 天（2592000）限制，对关机定时足够了
     SHUTDOWN_MAX_SECONDS = 2592000
+
+    # shutdown.exe 的退出码 ERROR_SHUTDOWN_IS_SCHEDULED：
+    # 系统里已经挂着一条计划关机时，再下发 /s /t 会返回 1190。
+    # 恢复任务时据此判断"旧命令仍在"，从而不必执行会弹系统通知的 /a
+    SHUTDOWN_ALREADY_SCHEDULED = 1190
 
     # 启动 shutdown.exe 时不创建控制台窗口：
     # exe 是无控制台打包的，不加这个每次执行命令都会闪一下黑窗
@@ -257,32 +294,67 @@ class ShutdownTimerApp:
 
         # =========================
         # ttk 风格：下拉框配色与扁平卡片统一
+        # clam 主题允许自由配色，原生 vista 主题改不了外观
         # =========================
         style = ttk.Style()
-        # clam 主题允许自由配色，原生 vista 主题改不了外观
         style.theme_use("clam")
+
         style.configure(
             "Card.TCombobox",
             fieldbackground=self.CARD,
             background=self.CARD,
             foreground=self.TEXT,
-            arrowcolor=self.SUBTEXT,
-            bordercolor=self.BORDER,
+            bordercolor=self.FIELD_BORDER,
             lightcolor=self.CARD,
             darkcolor=self.CARD,
             borderwidth=1,
-            padding=(self.px(4), self.px(3))
-        )
-        style.map(
-            "Card.TCombobox",
-            bordercolor=[("focus", self.PRIMARY)]
+            relief="solid",
+            padding=(self.px(9), self.px(5)),
+            insertcolor=self.PRIMARY,
+            selectbackground=self.SELECT_BG,
+            selectforeground=self.TEXT,
+            arrowcolor=self.ARROW,
+            arrowsize=self.px(10),
+            postoffset=(0, self.px(3), 0, 0)
         )
 
+        # 状态按顺序匹配（先命中先生效），所以 disabled 放最前
+        style.map(
+            "Card.TCombobox",
+            fieldbackground=[
+                ("disabled", self.FIELD_DISABLED_BG),
+                ("focus", self.FIELD_FOCUS_BG)
+            ],
+            bordercolor=[
+                ("disabled", self.BORDER),
+                ("focus", self.PRIMARY),
+                ("active", self.FIELD_HOVER)
+            ],
+            arrowcolor=[
+                ("disabled", self.DISABLED),
+                ("focus", self.ARROW_ACTIVE),
+                ("active", self.ARROW_ACTIVE)
+            ],
+            foreground=[
+                ("disabled", self.SUBTEXT)
+            ]
+        )
+
+        # 保留 clam 自带的箭头元素与布局：它画的是完整的四边框 +
+        # 独立箭头按钮，比自绘图片贴进去更干净（自绘会吃掉右边框）
+        # 只通过 arrowcolor / arrowsize 调整颜色和大小
+
+        # 下拉展开的列表：白底、无凸起边框、蓝色选中、去掉虚线焦点框
         root.option_add("*TCombobox*Listbox.background", self.CARD)
         root.option_add("*TCombobox*Listbox.foreground", self.TEXT)
         root.option_add("*TCombobox*Listbox.selectBackground", self.PRIMARY)
         root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        root.option_add("*TCombobox*Listbox.selectBorderWidth", 0)
         root.option_add("*TCombobox*Listbox.font", ("Microsoft YaHei", 10))
+        root.option_add("*TCombobox*Listbox.relief", "flat")
+        root.option_add("*TCombobox*Listbox.borderWidth", 0)
+        root.option_add("*TCombobox*Listbox.highlightThickness", 0)
+        root.option_add("*TCombobox*Listbox.activestyle", "none")
 
         # =========================
         # 标题
@@ -304,6 +376,7 @@ class ShutdownTimerApp:
 
         minute_box = ttk.Combobox(
             frame1,
+            style="Card.TCombobox",
             textvariable=self.minutes_var,
             values=[
                 "5",
@@ -332,7 +405,7 @@ class ShutdownTimerApp:
 
         self.flat_button(
             frame1,
-            "开始倒计时",
+            "开启定时",
             self.start_minutes,
             self.PRIMARY,
             self.PRIMARY_HOVER,
@@ -362,6 +435,7 @@ class ShutdownTimerApp:
 
         hour_box = ttk.Combobox(
             frame2,
+            style="Card.TCombobox",
             textvariable=self.hour_var,
             values=[f"{h:02d}" for h in range(24)],
             width=3,
@@ -391,6 +465,7 @@ class ShutdownTimerApp:
 
         minute_box = ttk.Combobox(
             frame2,
+            style="Card.TCombobox",
             textvariable=self.minute_var,
             values=[f"{m:02d}" for m in range(60)],
             width=3,
@@ -413,7 +488,7 @@ class ShutdownTimerApp:
         # 指定时间关机按钮
         self.flat_button(
             frame2,
-            "指定时间关机",
+            "开启定时",
             self.start_specific_time,
             self.PRIMARY,
             self.PRIMARY_HOVER,
@@ -526,7 +601,8 @@ class ShutdownTimerApp:
         root.deiconify()
 
     # ==================================================
-    # 保存任务
+    # 保存任务到 AppData
+    # 先写临时文件再原子替换，避免写到一半断电/退出留下坏文件
     # ==================================================
     def save_task(self):
 
@@ -535,22 +611,32 @@ class ShutdownTimerApp:
 
         try:
 
-            key = winreg.CreateKey(
-                winreg.HKEY_CURRENT_USER,
-                self.REG_PATH
+            path = self.SAVE_FILE
+
+            os.makedirs(
+                os.path.dirname(path),
+                exist_ok=True
             )
 
-            winreg.SetValueEx(
-                key,
-                self.REG_VALUE,
-                0,
-                winreg.REG_SZ,
-                self.target_time.strftime(
-                    "%Y-%m-%d %H:%M:%S"
+            tmp = path + ".tmp"
+
+            with open(
+                tmp,
+                "w",
+                encoding="utf-8"
+            ) as f:
+
+                json.dump(
+                    {
+                        "target_time": self.target_time.strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                    },
+                    f,
+                    ensure_ascii=False
                 )
-            )
 
-            winreg.CloseKey(key)
+            os.replace(tmp, path)
 
         except Exception:
             pass
@@ -560,31 +646,15 @@ class ShutdownTimerApp:
     # ==================================================
     def delete_saved_task(self):
 
-        try:
+        for path in (self.SAVE_FILE, self.SAVE_FILE + ".tmp"):
 
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                self.REG_PATH,
-                0,
-                winreg.KEY_SET_VALUE
-            )
+            try:
 
-            winreg.DeleteValue(key, self.REG_VALUE)
-            winreg.CloseKey(key)
+                if os.path.exists(path):
+                    os.remove(path)
 
-        except Exception:
-            pass
-
-        # 值删完后把整个空键也删掉（更干净）
-        # DeleteKey 只删键，不删子键；没有子键或键不存在时会报错，
-        # 这里忽略报错即可，下次 save_task 的 CreateKey 会重建
-        try:
-            winreg.DeleteKey(
-                winreg.HKEY_CURRENT_USER,
-                self.REG_PATH
-            )
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         # 顺手清掉旧版本遗留的 json 文件
         try:
@@ -596,8 +666,8 @@ class ShutdownTimerApp:
             pass
 
     # ==================================================
-    # 读取旧版本 shutdown_task.json（一次性迁移用）
-    # 无论成败都会把旧文件删掉，不留残留
+    # 读取旧版本 exe 目录下的 shutdown_task.json
+    # （一次性迁移到 AppData 用，无论成败都会把旧文件删掉）
     # ==================================================
     def read_legacy_task(self):
 
@@ -636,31 +706,47 @@ class ShutdownTimerApp:
 
         target_text = None
 
-        # ---------- 注册表 ----------
+        # ---------- AppData 中的任务文件 ----------
         try:
 
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                self.REG_PATH
+            with open(
+                self.SAVE_FILE,
+                "r",
+                encoding="utf-8"
+            ) as f:
+
+                data = json.load(f)
+
+            target_text = (
+                data.get("target_time")
+                if isinstance(data, dict)
+                else None
             )
 
-            target_text = winreg.QueryValueEx(
-                key,
-                self.REG_VALUE
-            )[0]
-
-            winreg.CloseKey(key)
+            if not target_text:
+                raise ValueError("无效的任务文件")
 
         except Exception:
 
             target_text = None
 
-        # ---------- 旧版 json 文件迁移 ----------
+            # 文件不存在不用管；文件存在但内容损坏就直接删掉，
+            # 避免每次启动都读到坏数据
+            # 这里不能用 delete_saved_task，它会把待迁移的旧 json 一起删掉
+            try:
+
+                if os.path.exists(self.SAVE_FILE):
+                    os.remove(self.SAVE_FILE)
+
+            except Exception:
+                pass
+
+        # ---------- 旧版 exe 目录 json 文件迁移 ----------
         legacy = False
 
         if target_text:
 
-            # 注册表里已有任务，旧文件已无用途，顺手清理
+            # AppData 里已有任务，旧文件已无用途，顺手清理
             self.read_legacy_task()
 
         else:
@@ -691,7 +777,7 @@ class ShutdownTimerApp:
             self.target_time = target
             self.running = True
 
-            # 旧任务迁移到注册表
+            # 旧版 json 里的任务迁移到 AppData
             if legacy:
 
                 self.save_task()
@@ -702,15 +788,20 @@ class ShutdownTimerApp:
                 (target - now).total_seconds()
             )
 
-            # 重新下发前必须先取消系统里仍挂着的旧关机命令：
-            # 退出程序时不取消系统关机（设计如此），
-            # 若直接再下发，系统会报"已有计划关机"(错误 1190)，
-            # 恢复就会被当成失败，任务误删、界面不回显
-            self.cancel_system_shutdown()
-
-            if not self.execute_shutdown(
+            # 恢复时不再无条件调用 shutdown /a：
+            # Windows 每取消一次计划关机都会弹「注销被取消 / 计划的关闭已取消」通知，
+            # 而退出程序时系统关机命令是保留的，于是每次打开软件都会弹一次。
+            # 改为直接按剩余秒数下发，按退出码分两种结果：
+            #   0    -> 系统里本来没有命令（例如刚重启过），已重新设好；
+            #   1190 -> 系统里还挂着上次留下的计划关机，直接沿用，不取消。
+            # 两条路径的关机时刻一致：/t 秒数都由同一个绝对目标时间算出，
+            # 旧命令在 T1 下发 /t (target-T1)、本次在 T2 下发 /t (target-T2)，
+            # 落点都是 target，最多 1 秒取整误差。
+            code = self.execute_shutdown(
                 remaining
-            ):
+            )
+
+            if code != 0 and code != self.SHUTDOWN_ALREADY_SCHEDULED:
 
                 self.running = False
                 self.target_time = None
@@ -749,8 +840,10 @@ class ShutdownTimerApp:
     def execute_shutdown(self, seconds):
         """
         执行 Windows 关机命令。
-        成功返回 True，失败返回 False，
+        成功返回 0；失败返回 shutdown.exe 的退出码（异常时返回 -1）。
         调用方必须检查返回值，失败时不能假倒计时。
+        返回退出码而不是布尔值，是为了让恢复流程能识别 1190
+        （系统里已有一条计划关机），避免误判成失败后去执行 /a 弹通知。
         """
 
         try:
@@ -769,11 +862,11 @@ class ShutdownTimerApp:
                 stderr=subprocess.DEVNULL
             )
 
-            return result.returncode == 0
+            return result.returncode
 
         except Exception:
 
-            return False
+            return -1
 
     # ==================================================
     # 取消 Windows 系统关机
@@ -795,6 +888,95 @@ class ShutdownTimerApp:
 
         except Exception:
             pass
+
+    # ==================================================
+    # 设置 / 改期关机任务（两个"开始"按钮共用）
+    #
+    # 已有任务时是"改期"，不是"删掉再重设"：
+    #   - 新命令确认成功之前，不动 target_time / running / 任务文件；
+    #   - 成功后一次性提交，直接覆盖保存，全程不调用 delete_saved_task；
+    #   - 失败则原任务原样保留，并尽量把旧的系统命令补回去。
+    # ==================================================
+    def set_shutdown_target(self, target, seconds):
+
+        old_target = self.target_time
+        old_running = self.running
+
+        # 连点/重复点同一个时间：目标几乎没变，直接忽略，
+        # 避免为此去取消系统里的关机命令（会弹"注销被取消"通知）
+        if (old_running and old_target is not None
+                and abs((target - old_target).total_seconds()) < 2):
+            return True
+
+        # 先直接下发，不预先取消任何东西。
+        # 系统里没有挂着的关机命令时（重启后第一次设置）一次就成功，
+        # 完全不会触发 shutdown /a
+        code = self.execute_shutdown(seconds)
+
+        # 1190：Windows 只允许存在一个计划关机，改时间必须先清掉旧的。
+        # 这是系统层面的限制，但任务数据始终没被删除
+        if code == self.SHUTDOWN_ALREADY_SCHEDULED:
+
+            self.cancel_system_shutdown()
+            code = self.execute_shutdown(seconds)
+
+        if code != 0:
+
+            # 失败时保住原任务：不清空状态、不删文件，只提示
+            if (old_running and old_target is not None
+                    and old_target > datetime.datetime.now()):
+
+                # 若上一步 /a 已把旧命令清掉，按原目标时间补回去；
+                # 若旧命令还在，这次调用返回 1190，同样说明原任务仍有效
+                self.execute_shutdown(
+                    int(
+                        (
+                            old_target - datetime.datetime.now()
+                        ).total_seconds()
+                    )
+                )
+
+                messagebox.showerror(
+                    "错误",
+                    "修改关机时间失败，已保留原来的关机任务。\n\n"
+                    "如果系统策略（组策略）禁止通过命令行关机，"
+                    "则本功能无法使用。",
+                    parent=self.root
+                )
+
+            else:
+
+                self.running = False
+                self.target_time = None
+                self.delete_saved_task()
+
+                messagebox.showerror(
+                    "错误",
+                    "设置关机失败。\n\n"
+                    "如果系统策略（组策略）禁止通过命令行关机，"
+                    "则本功能无法使用。",
+                    parent=self.root
+                )
+
+            return False
+
+        # 到这里新命令已确认生效，才提交状态并覆盖任务文件
+        self.target_time = target
+        self.running = True
+        self.save_task()
+
+        self.set_cancel_enabled(True)
+
+        self.status_label.config(
+            text=self.describe_target(target),
+            fg=self.OK_RED
+        )
+
+        self.countdown_label.config(fg=self.OK_RED)
+
+        self.update_countdown()
+
+        return True
 
     # ==================================================
     # ① 多少分钟后关机
@@ -819,53 +1001,14 @@ class ShutdownTimerApp:
 
             return
 
-        # 取消之前的 Windows 关机
-        self.cancel_system_shutdown()
-
-        # 计算目标时间
-        self.target_time = (
+        target = (
             datetime.datetime.now()
             + datetime.timedelta(
                 minutes=minutes
             )
         )
 
-        self.running = True
-
-        # 设置 Windows 关机（检查结果，失败则回滚，不能假倒计时）
-        if not self.execute_shutdown(
-            minutes * 60
-        ):
-
-            self.running = False
-            self.target_time = None
-            self.delete_saved_task()
-
-            messagebox.showerror(
-                "错误",
-                "设置关机失败。\n\n"
-                "如果系统策略（组策略）禁止通过命令行关机，"
-                "则本功能无法使用。",
-                parent=self.root
-            )
-
-            return
-
-        # 保存任务
-        self.save_task()
-
-        # 更新状态
-        self.set_cancel_enabled(True)
-
-        self.status_label.config(
-            text=self.describe_target(self.target_time),
-            fg=self.OK_RED
-        )
-
-        self.countdown_label.config(fg=self.OK_RED)
-
-        # 开始倒计时
-        self.update_countdown()
+        self.set_shutdown_target(target, minutes * 60)
 
     # ==================================================
     # ② 指定时间关机
@@ -922,46 +1065,7 @@ class ShutdownTimerApp:
             (target - now).total_seconds()
         )
 
-        # 取消之前的 Windows 关机
-        self.cancel_system_shutdown()
-
-        # 保存目标时间
-        self.target_time = target
-        self.running = True
-
-        # 设置 Windows 关机（检查结果，失败则回滚，不能假倒计时）
-        if not self.execute_shutdown(
-            seconds
-        ):
-
-            self.running = False
-            self.target_time = None
-            self.delete_saved_task()
-
-            messagebox.showerror(
-                "错误",
-                "设置关机失败。\n\n"
-                "如果系统策略（组策略）禁止通过命令行关机，"
-                "则本功能无法使用。",
-                parent=self.root
-            )
-
-            return
-
-        # 保存任务
-        self.save_task()
-
-        self.set_cancel_enabled(True)
-
-        self.status_label.config(
-            text=self.describe_target(target),
-            fg=self.OK_RED
-        )
-
-        self.countdown_label.config(fg=self.OK_RED)
-
-        # 开始倒计时
-        self.update_countdown()
+        self.set_shutdown_target(target, seconds)
 
     # ==================================================
     # 小工具：停止内部 1 秒倒计时定时器

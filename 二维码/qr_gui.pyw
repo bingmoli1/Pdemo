@@ -20,7 +20,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import qrcode
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk, ImageGrab
 
 try:
     from pyzbar.pyzbar import decode as zbar_decode
@@ -1143,6 +1143,8 @@ class BatchWindow:
         self.dec_rows = []
         self.dec_paths = []
         self._dec_keys = set()
+        self._clip_images = {}       # 虚拟路径 -> 剪贴板图片（只存内存，不落盘）
+        self._clip_seq = 0
         self._gen_tasks = []
         self._gen_index = 0
         self._gen_used = set()
@@ -1197,9 +1199,6 @@ class BatchWindow:
                      font=(FONT, 9, "bold"), relief="flat", padding=(P(4), P(4)))
         st.map("Treeview", background=[("selected", "#DBEAFE")],
                foreground=[("selected", TEXT)])
-        st.configure("TProgressbar", troughcolor="#EEF2F9", background=ACCENT,
-                     bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT,
-                     thickness=P(8))
         st.configure("TCombobox", fieldbackground="#FFFFFF", background="#FFFFFF",
                      foreground=TEXT, arrowcolor=MUTED, bordercolor=BORDER)
         st.configure("TCheckbutton", background=CARD, foreground=TEXT,
@@ -1414,8 +1413,6 @@ class BatchWindow:
         self.gen_tree = self._make_tree(
             right, ("idx", "content", "status", "file"),
             ("#", "内容", "状态", "输出文件"), (36, 190, 90, 170))
-        self.gen_prog = ttk.Progressbar(right, mode="determinate", maximum=100)
-        self.gen_prog.pack(fill="x", padx=P(10), pady=(P(8), 0))
         row = tk.Frame(right, bg=CARD)
         row.pack(fill="x", padx=P(10), pady=P(10))
         self.gen_start_btn = Btn(row, self.ui, "开始生成", self.start_gen,
@@ -1437,6 +1434,8 @@ class BatchWindow:
         bar.pack(fill="x", padx=P(10), pady=(P(10), P(6)))
         Btn(bar, self.ui, "添加图片", self.add_images, pt=9).pack(side="left")
         Btn(bar, self.ui, "添加文件夹", self.add_folder, pt=9).pack(side="left", padx=(P(5), 0))
+        Btn(bar, self.ui, "剪贴板粘贴", self.paste_clip_image,
+            pt=9).pack(side="left", padx=(P(5), 0))
         Btn(bar, self.ui, "移除选中", self.remove_selected, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(bar, self.ui, "清空", self.clear_paths, pt=9).pack(side="left", padx=(P(5), 0))
         self.dec_rec_var = tk.BooleanVar(value=self.cfg["dec_rec"])
@@ -1456,8 +1455,6 @@ class BatchWindow:
         self.dec_tree = self._make_tree(
             panel, ("idx", "file", "status", "result"),
             ("#", "文件名", "状态", "识别结果"), (36, 180, 100, 330))
-        self.dec_prog = ttk.Progressbar(panel, mode="determinate", maximum=100)
-        self.dec_prog.pack(fill="x", padx=P(10), pady=(P(8), 0))
         row = tk.Frame(panel, bg=CARD)
         row.pack(fill="x", padx=P(10), pady=P(10))
         self.dec_start_btn = Btn(row, self.ui, "开始识别", self.start_dec,
@@ -1476,8 +1473,6 @@ class BatchWindow:
         (self.gen_status_var if kind == "gen" else self.dec_status_var).set(text)
 
     def _progress(self, kind, done, total):
-        bar = self.gen_prog if kind == "gen" else self.dec_prog
-        bar["value"] = 100.0 * done / max(1, total)
         self._status(kind, f"处理中 {done}/{total}")
 
     def _set_running(self, kind, on):
@@ -1717,7 +1712,6 @@ class BatchWindow:
         self._gen_used = {f.lower() for f in os.listdir(outdir)}  # 不覆盖已有文件
         self.gen_rows = []
         self.gen_tree.delete(*self.gen_tree.get_children())
-        self.gen_prog["value"] = 0
         self._set_running("gen", True)
         self.update_gen_count()
         self._gen_step()
@@ -1771,6 +1765,48 @@ class BatchWindow:
         d = filedialog.askdirectory(parent=self.win, title="选择图片文件夹")
         if d:
             self.add_paths([d], switch=False)
+
+    def paste_clip_image(self):
+        """把剪贴板里的图片直接加入待识别列表（只存内存，不生成临时文件）。
+
+        支持截图 / 浏览器「复制图片」（CF_DIB、PNG）以及资源管理器里复制的
+        图片文件（CF_HDROP）；文件列表仍走原有的 add_paths 过滤与递归逻辑。
+        """
+        if self._running:
+            return
+        try:
+            data = ImageGrab.grabclipboard()
+        except Exception as e:
+            messagebox.showwarning("提示", f"读取剪贴板失败：{e}",
+                                   parent=self.win)
+            return
+        if isinstance(data, list):
+            added = self.add_paths([p for p in data if p], switch=False)
+            if not added:
+                messagebox.showwarning("提示", "复制的文件里没有可用图片",
+                                       parent=self.win)
+            return
+        if not isinstance(data, Image.Image):
+            messagebox.showwarning("提示", "剪贴板里没有图片，请先截图或复制图片",
+                                   parent=self.win)
+            return
+        try:
+            img = data.convert("RGB")
+            img.load()
+        except Exception as e:
+            messagebox.showwarning("提示", f"剪贴板图片无法读取：{e}",
+                                   parent=self.win)
+            return
+        self._clip_seq += 1
+        virtual = os.path.abspath(f"剪贴板图片_{self._clip_seq:02d}.png")
+        key = os.path.normcase(virtual)
+        if key in self._dec_keys:
+            return
+        self._dec_keys.add(key)
+        self.dec_paths.append(virtual)
+        self._clip_images[virtual] = img
+        self.refresh_dec_list()
+        self._status("dec", f"已粘贴剪贴板图片，共 {len(self.dec_paths)} 张")
 
     def _add_one(self, path):
         if not path.lower().endswith(IMAGE_EXTS):
@@ -1826,6 +1862,7 @@ class BatchWindow:
         for i in sorted({self.dec_tree.index(s) for s in sel}, reverse=True):
             p = self.dec_paths.pop(i)
             self._dec_keys.discard(os.path.normcase(os.path.abspath(p)))
+            self._clip_images.pop(p, None)
         self.refresh_dec_list()
         self._status("dec", f"共 {len(self.dec_paths)} 张图片")
 
@@ -1834,9 +1871,9 @@ class BatchWindow:
             return
         self.dec_paths.clear()
         self._dec_keys.clear()
+        self._clip_images.clear()
         self.dec_rows = []
         self.refresh_dec_list()
-        self.dec_prog["value"] = 0
         self._status("dec", "就绪")
 
     def start_dec(self):
@@ -1852,7 +1889,6 @@ class BatchWindow:
             return
         self.dec_rows = []
         self.dec_tree.delete(*self.dec_tree.get_children())
-        self.dec_prog["value"] = 0
         self._dec_index = 0
         self._set_running("dec", True)
         self._dec_step()
@@ -1870,8 +1906,12 @@ class BatchWindow:
             name = os.path.basename(path)
             texts, err = [], ""
             try:
-                with Image.open(path) as im:
-                    img = im.convert("RGB")
+                clip = self._clip_images.get(path)
+                if clip is not None:
+                    img = clip.convert("RGB")
+                else:
+                    with Image.open(path) as im:
+                        img = im.convert("RGB")
                 texts = decode_qr_image(img)
             except Exception as e:
                 err = str(e)
