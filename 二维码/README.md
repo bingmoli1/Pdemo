@@ -1,69 +1,26 @@
-把快捷方式放在启动文件夹自启动
+打包
+
+双击 `build.bat` 即可；或在本目录打开 Git Bash 执行下面这条命令（全文只此一条）：
+
+```bash
+(taskkill /F /IM "二维码工具.exe" 2>/dev/null || true) && py -m pip install --disable-pip-version-check -q pyinstaller qrcode pyzbar pillow tkinterdnd2 && py -m PyInstaller --noconfirm --distpath . "二维码工具.spec"
+```
+
+- 整个项目文件夹拷到任意电脑、任意位置都能直接打包：`build.bat` 用 `%~dp0` 自定位，命令不含绝对路径；都用不带版本号的 `py` 并自动 `pip install` 依赖，换 Python 版本也能构建。
+- 新电脑只需装一个较新的 Python 3（勾选 py launcher），首次联网装依赖约 10 MB；没装 Python 或缺依赖时脚本会给出提示。
+- 必须走 `二维码工具.spec`（单文件 + `collect_all('pyzbar')`）。**不要**换成纯参数命令，漏掉 zbar 会让新机器上「二维码 → 文本」失效。
+- 产物 `二维码工具.exe` 自包含：拷单个文件即可在 Win10/11 x64 运行，无需 Python / Office / VC++、不联网；首次运行可能被 SmartScreen 拦，选「仍要运行」。别只拷 `.lnk` 快捷方式。
 
 功能
 
-> **程序只有一个窗口**：启动即进入「批量转码」主界面（窗口标题「二维码工具」），直接以根窗口运行，不再有隐藏主窗口。单张互转页面及其切换按钮已移除；关闭窗口即退出程序。
+> 启动即进入批量转码主界面，关闭窗口即退出。
 
-- `文本 → 二维码`（批量生成）：一行一条内容，支持「导入文件」对话框**一次多选**多个清单文件（内容按选择顺序合并，单个文件失败不影响其余）、粘贴、直接拖入多个清单文件；可设输出目录、命名方式（**默认「内容命名」**，可切「序号命名」）、前缀（**默认为空**）、起始序号；批量生成 PNG（UTF-8 字节写入、H 级纠错），已存在的同名文件自动加后缀不覆盖。生成中以文字显示进度、可取消，结果在右侧表格逐条显示（生成页不提供导出）；**双击任意一行可把该行生成的二维码图片复制进系统剪贴板**（图片本身，可直接 Ctrl+V 到微信 / QQ / Word / 画图），失败行或文件已删除的行不会覆盖剪贴板。复制的图片也能在识别页点「剪贴板粘贴」直接放回来识别。
-- 清单格式：`TXT` / `CSV` / `TSV` / Excel `.xlsx` / Word `.docx` 都能直接导入或拖入，只用标准库解析（无需安装 Office、openpyxl 或 python-docx）。**Word 按每行一条**（正文段落一行，段落内手动换行再拆行；表格每行取第一个单元格）；**Excel 读取所有单元格**（按行优先，每一个非空方框 = 一条，包含第二列及之后的内容；表头整行跳过）；**CSV / TSV 仍取每行第一个非空单元格**。以上均空行忽略，Excel 目前只读第一个工作表。旧版 `.xls` / `.doc` 需先另存为新格式或 CSV。
-- `二维码 → 文本`（批量识别）：可多选图片、添加文件夹、**「剪贴板粘贴」**（把截图 / 浏览器复制的图片直接放入待识别列表，只存内存、不生成临时文件；复制的是图片文件时会自动过滤并支持递归）、或直接拖入图片/文件夹；**「包含子文件夹」默认勾选**，添加的文件夹连同下级目录一起扫描（只需扫当前层可手动取消勾选）；一张图里有多个二维码会全部读出；逐张显示识别结果与状态，**双击任意一行即可单独复制该行的识别内容**（未识别 / 待识别的行不会覆盖剪贴板，右上角状态栏会提示已复制第几行），也可一键复制全部结果，或导出 CSV / TXT / Excel `.xlsx` / Word `.docx` 四种格式（保存对话框选中的「保存类型」决定格式，文件名扩展名会自动修正，导出完成会提示实际格式）。**Word / TXT 只导出识别内容，一行一条**（与「复制全部结果」一致：跳过未识别的条目，条目内换行压成空格；导出的文件可直接拖回工具再生成二维码）；**CSV / Excel 仍导出「序号 / 文件名 / 状态 / 识别结果」四列表格**（CSV 带 BOM，Excel 为单工作表）。均用标准库生成，无需安装 Office。
-- 默认输出目录为 `桌面/二维码批量输出`，可随时改；把清单文件（TXT/CSV/Excel/Word）、二维码图片或文件夹拖入窗口，会自动分派到对应页签。
-- **记住上次设置**：输出目录、命名方式、前缀、起始序号、「包含子文件夹」、上次导出格式、当前页签会自动保存到 `%APPDATA%\二维码工具\settings.json`。文件是纯文本 JSON，可直接查看 / 修改 / 删除（删掉即恢复出厂默认）；只记界面设置，不记输入清单和识别结果。改动后 400ms 内自动落盘，关闭窗口时再兜底保存一次；放在用户目录，项目目录不会多出文件。换电脑或新用户首次运行仍用默认值，配置不跟着 exe 走。
-- 两个页面**不设进度条**（按钮上方不留任何横杠）；生成 / 识别过程中，进度由右上角「处理中 x/y」文字显示，任务结束后显示成功 / 失败统计。
-- 编解码统一由模块级 `make_qr_image` / `decode_qr_image` / `smart_decode` 实现，批量生成与批量识别结果一致。
+- **文本 → 二维码**：一行一条内容，可导入 / 拖入多个 TXT、CSV、TSV、Excel、Word 清单，或直接粘贴。可设输出目录（默认 `桌面/二维码批量输出`）、命名方式（默认「内容命名」）、前缀（默认空）、起始序号；生成 PNG，同名自动加后缀不覆盖。结果表格**双击一行复制该二维码图片**（可直接 Ctrl+V 到微信 / Word），也能在识别页「剪贴板粘贴」放回来识别。
+- **清单解析**：Word 按每行一条（表格取每行首格）；Excel 读取所有非空单元格、按行优先、跳过表头（只读第一个工作表）；CSV / TSV 取每行第一个非空单元格；空行忽略。只用标准库，无需装 Office；旧版 `.xls` / `.doc` 需另存为新格式。
+- **二维码 → 文本**：添加图片 / 文件夹 / 剪贴板粘贴 / 拖入；「包含子文件夹」默认勾选；一图多码全部读出。结果表格**双击一行单独复制该行识别内容**，也可一键复制全部，或导出 CSV / TXT / Excel / Word。Word / TXT 一行一条识别内容；CSV / Excel 为「序号 / 文件名 / 状态 / 识别结果」四列表格。
+- **记住上次设置**：输出目录、命名、前缀、起始序号、递归、导出格式、页签存到 `%APPDATA%\二维码工具\settings.json`（纯文本 JSON，删掉即恢复默认）；不记输入内容和识别结果。
+- 生成 / 识别可取消，进度由右上角「处理中 x/y」文字显示；两个页面不设进度条。
 
 验证
 
-> 回归测试脚本（`_test_*.py`）已按清理要求删除，需要时可从回收站恢复。
-
-双击 `二维码工具.exe` 检查启动即可；改动源码后按下方命令重新打包。
-
-打包
-
-> 当前构建配置（`二维码工具.spec`）已锁定为：**不压缩（upx=False）、不排除任何模块**，重新打包会得到与现版 `二维码工具.exe`（约 22.5 MB）功能等价的产物。
-
-## 本机一键打包（推荐，每轮改完源码实际执行的命令）
-
-必须先关掉正在运行的旧 exe，否则 `二维码工具.exe` 被占用会导致替换失败。`Git Bash` 下整行复制即可：
-```bash
-cd "D:/Pdemo/二维码" && (taskkill /F /IM "二维码工具.exe" 2>/dev/null || true) && "C:/Users/12416/AppData/Local/Programs/Python/Python314/python.exe" -m PyInstaller --noconfirm --distpath . "二维码工具.spec"
-```
-
-`PowerShell` 等价写法：
-```powershell
-Set-Location "D:\Pdemo\二维码"
-taskkill /F /IM "二维码工具.exe" 2>$null
-& "C:\Users\12416\AppData\Local\Programs\Python\Python314\python.exe" -m PyInstaller --noconfirm --distpath . "二维码工具.spec"
-```
-
-`CMD` 等价写法：
-```bat
-cd /d "D:\Pdemo\二维码"
-taskkill /F /IM "二维码工具.exe" 2>nul
-"C:\Users\12416\AppData\Local\Programs\Python\Python314\python.exe" -m PyInstaller --noconfirm --distpath . "二维码工具.spec"
-```
-逐行粘贴执行即可；**不要存成 `.bat` 文件**，中文路径容易因 GBK/UTF-8 编码不一致而乱码（要存脚本请用 Git Bash 或 PowerShell，UTF-8）。
-
-- `--distpath .`：新 exe 直接输出到项目根目录并覆盖旧文件；`--noconfirm`：跳过覆盖确认；不加 `--clean`，保留缓存加快打包。
-- 打包完会生成 `build/` 中间目录，删除即可，不影响 exe；根目录最终仍只有 6 个文件（含 README、spec、ico、快捷方式）。
-- 必须用**绝对路径的 Python 3.14** 调 `-m PyInstaller`；直接敲 `pyinstaller` 会命中 PATH 上的 3.13，因缺依赖而失败。
-
-## 其它等价形式
-
-已 `cd` 到项目目录、且已关闭旧 exe 时的最简写法（就是上面一键命令的核心）：
-```bash
-"C:/Users/12416/AppData/Local/Programs/Python/Python314/python.exe" -m PyInstaller --noconfirm --distpath . "二维码工具.spec"
-```
-
-不用 `.spec`、直接传命令行参数（与 `.spec` 等价，临时验证时可用）：
-```bash
-"C:/Users/12416/AppData/Local/Programs/Python/Python314/python.exe" -m PyInstaller --noconfirm --noupx -F -w --name "二维码工具" --icon qr_icon.ico --distpath . --collect-all pyzbar qr_gui.pyw
-```
-
-说明：
-- `-F` 单文件、`-w` 窗口模式、`--icon qr_icon.ico` 内嵌图标、`--collect-all pyzbar` 收集解码所需的 zbar DLL。
-- `--noupx` 对应 `.spec` 中的 `upx=False`，确保不被意外压缩（功能不变，体积保持原始大小）。
-- 依赖装在系统 Python 3.14（`C:/Users/12416/AppData/Local/Programs/Python/Python314/python.exe`），PATH 上的 3.13 无依赖；需安装 `qrcode`、`pyzbar`、`Pillow(PIL)`、`tkinterdnd2`、`PyInstaller`。Excel/Word 清单**解析**用标准库 `zipfile` + `xml.etree`，Excel/Word 结果**导出**用标准库手写 OOXML（`zipfile` + `xml.sax.saxutils`），都不增加打包依赖。
-- 产物 `二维码工具.exe` 为自包含单文件，复制到任意 Windows 64 位电脑双击即可运行，无需安装运行库。
-
- 
+双击 `二维码工具.exe` 检查启动；改动源码后按开头命令重新打包。
