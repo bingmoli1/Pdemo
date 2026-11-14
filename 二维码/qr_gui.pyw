@@ -1436,7 +1436,6 @@ class BatchWindow:
         Btn(bar, self.ui, "添加文件夹", self.add_folder, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(bar, self.ui, "剪贴板粘贴", self.paste_clip_image,
             pt=9).pack(side="left", padx=(P(5), 0))
-        Btn(bar, self.ui, "移除选中", self.remove_selected, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(bar, self.ui, "清空", self.clear_paths, pt=9).pack(side="left", padx=(P(5), 0))
         self.dec_rec_var = tk.BooleanVar(value=self.cfg["dec_rec"])
         ttk.Checkbutton(bar, text="包含子文件夹", variable=self.dec_rec_var,
@@ -1455,6 +1454,7 @@ class BatchWindow:
         self.dec_tree = self._make_tree(
             panel, ("idx", "file", "status", "result"),
             ("#", "文件名", "状态", "识别结果"), (36, 180, 100, 330))
+        self.dec_tree.bind("<Double-Button-1>", self.copy_dec_row)
         row = tk.Frame(panel, bg=CARD)
         row.pack(fill="x", padx=P(10), pady=P(10))
         self.dec_start_btn = Btn(row, self.ui, "开始识别", self.start_dec,
@@ -1853,19 +1853,6 @@ class BatchWindow:
                                  tags=("wait",))
         self.dec_count_var.set(f"共 {len(self.dec_paths)} 张图片")
 
-    def remove_selected(self):
-        if self._running:
-            return
-        sel = self.dec_tree.selection()
-        if not sel:
-            return
-        for i in sorted({self.dec_tree.index(s) for s in sel}, reverse=True):
-            p = self.dec_paths.pop(i)
-            self._dec_keys.discard(os.path.normcase(os.path.abspath(p)))
-            self._clip_images.pop(p, None)
-        self.refresh_dec_list()
-        self._status("dec", f"共 {len(self.dec_paths)} 张图片")
-
     def clear_paths(self):
         if self._running:
             return
@@ -1934,6 +1921,29 @@ class BatchWindow:
             self._finish("dec")
         else:
             self._job = self.win.after(1, self._dec_step)
+
+    def copy_dec_row(self, event):
+        """双击结果表格某一行：只把这一行的识别内容复制到剪贴板。"""
+        tv = self.dec_tree
+        iid = tv.identify_row(event.y)
+        if not iid:
+            return
+        i = tv.index(iid)
+        values = tv.item(iid, "values")
+        # 只认识别成功的行；「待识别 / 未识别到二维码 / 失败」不覆盖剪贴板。
+        if (i >= len(self.dec_rows) or len(values) < 3
+                or not str(values[2]).startswith("成功")):
+            self._status("dec", f"第 {i + 1} 行没有识别结果")
+            return
+        text = self.dec_rows[i]["result"]
+        if not text:
+            self._status("dec", f"第 {i + 1} 行没有识别结果")
+            return
+        # 用 dec_rows 里的原文，不读表格文本，避免特殊字符被 Tcl 列表转义。
+        self.win.clipboard_clear()
+        self.win.clipboard_append(text)
+        short = text if len(text) <= 24 else text[:24] + "…"
+        self._status("dec", f"已复制第 {i + 1} 行：{short}")
 
     def copy_dec_results(self):
         texts = [r["result"] for r in self.dec_rows if r["result"]]
