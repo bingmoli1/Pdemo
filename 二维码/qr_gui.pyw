@@ -9,9 +9,12 @@
 """
 
 import csv
+import ctypes
 import json
 import os
 import re
+import struct
+import time
 import webbrowser
 import zipfile
 import xml.etree.ElementTree as ET
@@ -291,6 +294,85 @@ def decode_qr_image(img: "Image.Image") -> list:
         big = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
         results = zbar_decode(big)
     return [smart_decode(r.data) for r in results]
+
+
+def copy_image_to_clipboard(img) -> bool:
+    """把 PIL 图片以 CF_DIB 位图写入系统剪贴板（Windows，纯标准库）。
+
+    写入的是图片本身，可直接 Ctrl+V 到微信 / QQ / Word / 画图等程序；
+    24 位 BGR、自下而上、每行 4 字节对齐，是兼容性最好的剪贴板图片格式。
+    任何失败都返回 False 而不抛异常，避免打断界面。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        from ctypes import wintypes
+
+        img = img.convert("RGB")
+        w, h = img.size
+        r, g, b = img.split()
+        bgr = Image.merge("RGB", (b, g, r)).tobytes()
+        row_bytes = w * 3
+        stride = (row_bytes + 3) & ~3              # 每行补齐到 4 字节
+        pixels = bytearray(stride * h)
+        for y in range(h):                          # DIB 自下而上存放
+            src = (h - 1 - y) * row_bytes
+            pixels[y * stride:y * stride + row_bytes] = bgr[src:src + row_bytes]
+        # BITMAPINFOHEADER：40 字节、24 位、BI_RGB、正向高度
+        header = struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0,
+                             len(pixels), 0, 0, 0, 0)
+        data = header + bytes(pixels)
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        u32 = ctypes.WinDLL("user32", use_last_error=True)
+        HGLOBAL = ctypes.c_void_p
+        k32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        k32.GlobalAlloc.restype = HGLOBAL
+        k32.GlobalLock.argtypes = [HGLOBAL]
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalUnlock.argtypes = [HGLOBAL]
+        k32.GlobalUnlock.restype = wintypes.BOOL
+        k32.GlobalFree.argtypes = [HGLOBAL]
+        u32.OpenClipboard.argtypes = [wintypes.HWND]
+        u32.OpenClipboard.restype = wintypes.BOOL
+        u32.EmptyClipboard.restype = wintypes.BOOL
+        u32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+        u32.SetClipboardData.restype = ctypes.c_void_p
+        u32.CloseClipboard.restype = wintypes.BOOL
+
+        # GMEM_MOVEABLE | GMEM_ZEROINIT
+        hmem = k32.GlobalAlloc(0x0042, len(data))
+        if not hmem:
+            return False
+        ptr = k32.GlobalLock(hmem)
+        if not ptr:
+            k32.GlobalFree(hmem)
+            return False
+        ctypes.memmove(ptr, data, len(data))
+        k32.GlobalUnlock(hmem)
+
+        # 剪贴板可能被别的程序短暂占用，重试几次
+        opened = False
+        for _ in range(10):
+            if u32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.05)
+        if not opened:
+            k32.GlobalFree(hmem)
+            return False
+        ok = False
+        try:
+            u32.EmptyClipboard()
+            # CF_DIB = 8；成功后内存所有权归系统，不能再 GlobalFree
+            ok = bool(u32.SetClipboardData(8, hmem))
+        finally:
+            u32.CloseClipboard()
+        if not ok:
+            k32.GlobalFree(hmem)
+        return ok
+    except Exception:
+        return False
 
 
 def safe_filename(name: str, maxlen: int = 48) -> str:
@@ -1413,6 +1495,7 @@ class BatchWindow:
         self.gen_tree = self._make_tree(
             right, ("idx", "content", "status", "file"),
             ("#", "内容", "状态", "输出文件"), (36, 190, 90, 170))
+        self.gen_tree.bind("<Double-Button-1>", self.copy_gen_row)
         row = tk.Frame(right, bg=CARD)
         row.pack(fill="x", padx=P(10), pady=P(10))
         self.gen_start_btn = Btn(row, self.ui, "开始生成", self.start_gen,
@@ -1921,6 +2004,35 @@ class BatchWindow:
             self._finish("dec")
         else:
             self._job = self.win.after(1, self._dec_step)
+
+    def copy_gen_row(self, event):
+        """双击生成结果某一行：把该行生成的二维码图片放进系统剪贴板。"""
+        tv = self.gen_tree
+        iid = tv.identify_row(event.y)
+        if not iid:
+            return
+        i = tv.index(iid)
+        if i >= len(self.gen_rows):
+            return
+        row = self.gen_rows[i]
+        path = row.get("file", "")
+        # 只复制确实生成成功的行；失败 / 文件已被删掉不覆盖剪贴板。
+        if (row.get("tag") != "ok" or not path
+                or not os.path.isfile(path)):
+            self._status("gen", f"第 {i + 1} 行没有生成图片")
+            return
+        try:
+            with Image.open(path) as im:
+                img = im.convert("RGB")
+                img.load()
+        except Exception as e:
+            self._status("gen", f"第 {i + 1} 行图片读取失败：{e}")
+            return
+        if not copy_image_to_clipboard(img):
+            messagebox.showwarning("提示", "复制图片到剪贴板失败，请重试",
+                                   parent=self.win)
+            return
+        self._status("gen", f"已复制第 {i + 1} 行二维码图片")
 
     def copy_dec_row(self, event):
         """双击结果表格某一行：只把这一行的识别内容复制到剪贴板。"""
