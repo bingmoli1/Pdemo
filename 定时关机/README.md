@@ -12,7 +12,7 @@ python main.py
 
 ```bash
 pip install pyinstaller
-pyinstaller -F -w --name "定时关机" --distpath . main.py
+pyinstaller -F -w --name "定时关机" --icon icon.ico --add-data "icon.ico;." --distpath . main.py
 ```
 
 说明：
@@ -20,8 +20,25 @@ pyinstaller -F -w --name "定时关机" --distpath . main.py
 - `-F`：打包成单文件 exe
 - `-w`：无控制台黑窗
 - `--name "定时关机"`：生成的程序名为 `定时关机.exe`
+- `--icon icon.ico`：exe 文件图标（资源管理器 / 任务栏 / 桌面快捷方式显示的那个）
+- `--add-data "icon.ico;."`：把 ico 一起打进 exe，供**窗口标题栏**图标使用
 - `--distpath .`：exe 直接输出到项目根目录（不生成 dist 文件夹）
 - 可加 `--noconfirm`：覆盖旧文件时不再询问
+
+**加图标后打包不能省掉上面两个参数**，漏掉就会出现「文件有图标、窗口标题栏没图标」或反之。
+
+## 图标
+
+`icon.ico` 是程序图标：蓝色渐变圆角方块 + 白色时钟，内含 16/24/32/48/64/128/256 七种尺寸，小尺寸在任务栏不糊。
+
+图标对使用者是**完全透明**的：
+
+- 文件图标编译在 exe 的 PE 资源里，属于 exe 本体；
+- 窗口图标由 `--add-data` 打进 exe，单文件程序运行时解压到 `%TEMP%\_MEIxxxx` 再从那里加载（`main.py` 的 `resource_path()` 负责找）。
+
+所以**只把 exe 拷到新电脑就能显示图标，不需要一起复制 `icon.ico`**。源码运行时 `resource_path()` 会回退到脚本所在目录，同样正常。
+
+想换图标：替换 `icon.ico`（建议保留多尺寸）后重新打包即可，`main.py` 不用改。
 
 打包会产生 `build\` 中间目录和 `定时关机.spec`，exe 正常运行不依赖它们，可随意删除。
 重复打包时 PyInstaller 会复用缓存，速度更快；如打包异常可先删除 `build\` 目录再重新打包。

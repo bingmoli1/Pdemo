@@ -58,6 +58,23 @@ def another_instance_running():
 # %APPDATA%\ScheduledShutdown\shutdown_task.json
 # 只写当前用户自己的目录，不需要管理员权限，也不写注册表
 # ======================================================
+# 资源路径：源码运行与 PyInstaller 单文件 exe 都能用
+#
+# 单文件 exe 会把 --add-data 打进去的资源解压到 sys._MEIPASS，
+# 所以图标是跟着 exe 走的：把 exe 单独拷到别的电脑，
+# 窗口图标照样正常，不需要额外附带 icon.ico
+# ======================================================
+def resource_path(name):
+
+    base = getattr(sys, "_MEIPASS", None)
+
+    if not base:
+        base = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(base, name)
+
+
+# ======================================================
 def get_save_file():
 
     base = os.environ.get("APPDATA")
@@ -272,6 +289,25 @@ class ShutdownTimerApp:
                 bg=self.DISABLED
             )
 
+    # ==================================================
+    # 窗口图标（资源已打进 exe，拷走 exe 也能显示）
+    # ==================================================
+    def set_window_icon(self):
+
+        path = resource_path("icon.ico")
+
+        if not os.path.exists(path):
+            return
+
+        try:
+            # 当前窗口 + 之后弹出的对话框都用同一图标
+            # （分开设置：default 只管后续 toplevel，不改当前窗口）
+            self.root.iconbitmap(path)
+            self.root.iconbitmap(default=path)
+        except Exception:
+            # 个别环境 Tk 不认 ico 时保持系统默认图标，不影响功能
+            pass
+
     def __init__(self, root):
 
         self.root = root
@@ -283,6 +319,9 @@ class ShutdownTimerApp:
         self.root.title("Windows 定时关机工具")
         self.root.configure(bg=self.BG)
         self.root.resizable(False, False)
+
+        # 窗口 / 任务栏图标，失败不影响功能
+        self.set_window_icon()
 
         # 96 DPI 设计尺寸，按实际 DPI 等比放大
         self.ui_scale = max(1.0, root.winfo_fpixels("1i") / 96.0)

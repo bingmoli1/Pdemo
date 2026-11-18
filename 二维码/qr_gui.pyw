@@ -10,12 +10,12 @@
 
 import csv
 import ctypes
+import io
 import json
 import os
 import re
 import struct
 import time
-import webbrowser
 import zipfile
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
@@ -44,7 +44,6 @@ CARD = "#FFFFFF"         # 卡片背景
 FIELD = "#F8FAFD"        # 预览区底色
 BORDER = "#E9EDF5"       # 卡片描边
 FIELD_BORDER = "#E7ECF4" # 预览区描边
-DIVIDER = "#EFF2F8"      # 分隔线
 TEXT = "#1D2534"         # 主文字
 MUTED = "#8A93A8"        # 次要文字
 STATUS_FG = "#6B7488"    # 状态栏文字
@@ -94,6 +93,13 @@ EXPORT_TYPES = (
 EXPORT_EXT_BY_LABEL = {label: ext for label, ext in EXPORT_TYPES}
 EXPORT_LABEL_BY_EXT = {ext: label for label, ext in EXPORT_TYPES}
 
+# 生成图片宽高（像素）：界面可自由输入；二维码按较短边重绘后居中，不拉伸
+GEN_SIZE_DEFAULT = 300
+GEN_SIZE_MIN = 100
+GEN_SIZE_MAX = 4000
+# 二维码黑白方块区域（不含静区）占图片较短边的比例，剩余部分作四周白边
+QR_FILL_RATIO = 0.90
+
 # ----------------------------------------------------------------------
 # 上次设置：%APPDATA%\二维码工具\settings.json
 #   纯文本 JSON，可直接查看 / 修改 / 删除（删掉即恢复默认）；不放在 exe 目录，
@@ -101,10 +107,12 @@ EXPORT_LABEL_BY_EXT = {ext: label for label, ext in EXPORT_TYPES}
 # ----------------------------------------------------------------------
 SETTING_DEFAULTS = {
     "version": 1,
-    "gen_dir": "",              # 空 = 桌面 / 二维码批量输出
+    "gen_dir": "",              # 上次导出位置，只作选择框的初始目录
     "gen_name": "内容命名",
     "gen_prefix": "",
     "gen_start": "1",
+    "gen_w": "300",
+    "gen_h": "300",
     "dec_rec": True,
     "export_ext": ".csv",
     "tab": 0,
@@ -119,6 +127,7 @@ def settings_path() -> str:
 def load_settings() -> dict:
     """读取上次设置；文件不存在或内容损坏时安静地用默认值。"""
     cfg = dict(SETTING_DEFAULTS)
+    raw = {}
     try:
         with open(settings_path(), "r", encoding="utf-8") as f:
             raw = json.load(f)
@@ -128,6 +137,14 @@ def load_settings() -> dict:
                     cfg[key] = raw[key]
     except (OSError, ValueError, TypeError):
         return dict(SETTING_DEFAULTS)
+    if not isinstance(raw, dict):
+        raw = {}
+    # 兼容上一版只有单边档位的配置：选过数字就沿用作宽高
+    if "gen_w" not in raw and "gen_h" not in raw:
+        old_size = str(raw.get("gen_size", ""))
+        if (old_size.isdigit()
+                and GEN_SIZE_MIN <= int(old_size) <= GEN_SIZE_MAX):
+            cfg["gen_w"] = cfg["gen_h"] = old_size
     # 清洗：手工改坏配置也不会让界面崩
     if (not isinstance(cfg["gen_dir"], str)
             or (cfg["gen_dir"] and not os.path.isabs(cfg["gen_dir"]))):
@@ -141,6 +158,11 @@ def load_settings() -> dict:
             or int(cfg["gen_start"]) > 999999):
         cfg["gen_start"] = "1"
     cfg["gen_start"] = str(cfg["gen_start"])
+    for key in ("gen_w", "gen_h"):
+        v = str(cfg[key])
+        if not v.isdigit() or not (GEN_SIZE_MIN <= int(v) <= GEN_SIZE_MAX):
+            v = str(GEN_SIZE_DEFAULT)
+        cfg[key] = v
     cfg["dec_rec"] = bool(cfg["dec_rec"])
     if cfg["export_ext"] not in EXPORT_LABEL_BY_EXT:
         cfg["export_ext"] = ".csv"
@@ -274,14 +296,56 @@ def smart_decode(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def make_qr_image(link: str) -> "Image.Image":
-    """按工具统一参数生成二维码（UTF-8 字节写入、H 级纠错、白底黑块）。"""
-    qr = qrcode.QRCode(
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=10, border=4)
-    qr.add_data(link.encode("utf-8"))
+def qr_side(width: int, height: int, modules: int) -> int:
+    """二维码黑白方块区域的目标边长（不含静区）。
+
+    占较短边的 QR_FILL_RATIO（90%），剩下的 10% 由四周白色静区平分；
+    内容长到每模块不足 1 像素时按 1 像素/模块兜底，优先保证能扫出来。
+    """
+    short = min(width, height)
+    side = max(modules, int(short * QR_FILL_RATIO + 0.5))
+    return min(side, short)
+
+
+def make_qr_image(link: str, width: int = 0, height: int = 0) -> "Image.Image":
+    """按工具统一参数生成二维码（UTF-8 字节写入、H 级纠错、白底黑块）。
+
+    width / height > 0 时输出严格为该宽高的图片：黑白方块区域保持正方形并
+    占较短边 90%，居中贴到白底画布，余下的白边即静区，不拉伸变形。
+    先用整数 box_size 无静区重绘，再 NEAREST 微调到精确边长，全程纯黑白、
+    不产生插值灰边。内容长到每模块不足 2 像素时保持 1 像素/模块原样
+    （占比会小于 90%，优先保证能识别）。两者为 0 时沿用 box_size=10。
+    """
+    data = link.encode("utf-8")
+    err = qrcode.constants.ERROR_CORRECT_H
+    if width <= 0 or height <= 0:
+        qr = qrcode.QRCode(error_correction=err, box_size=10, border=4)
+        qr.add_data(data)
+        qr.make(fit=True)
+        return qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+    probe = qrcode.QRCode(error_correction=err, box_size=1, border=0)
+    probe.add_data(data)
+    probe.make(fit=True)
+    modules = probe.modules_count
+    side = qr_side(width, height, modules)
+    box_size = max(1, int(side / modules + 0.5))
+    # border=0：只画黑白方块，静区由画布留白提供，避免静区吃掉 90% 的份额
+    qr = qrcode.QRCode(error_correction=err, box_size=box_size, border=0)
+    qr.add_data(data)
     qr.make(fit=True)
-    return qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    if box_size >= 2 and img.width != side:
+        # 整数倍重绘后的边长与 90% 目标略有出入，NEAREST 精确微调
+        img = img.resize((side, side), Image.NEAREST)
+    elif img.width > min(width, height):
+        # 1 像素/模块都放不下时才等比收进画布（物理上已无法保证清晰）
+        short = min(width, height)
+        img = img.resize((short, short), Image.NEAREST)
+    # box_size == 1 时保持原样：把 1px/模块放大反而会破坏定位图形比例
+    canvas = Image.new("RGB", (width, height), "white")
+    canvas.paste(img, ((width - img.width) // 2, (height - img.height) // 2))
+    return canvas
 
 
 def decode_qr_image(img: "Image.Image") -> list:
@@ -1230,9 +1294,11 @@ class BatchWindow:
         self._gen_tasks = []
         self._gen_index = 0
         self._gen_used = set()
-        self._gen_dir = ""
         self._gen_start = 1
+        self._gen_w = 0
+        self._gen_h = 0
         self._dec_index = 0
+        self._more_win = None        # 「更多设置」小弹窗（唯一实例）
 
         self._init_style()
         self._build()
@@ -1368,7 +1434,8 @@ class BatchWindow:
         self._build_dec(self.dec_frame)
         # 设置变化后延迟落盘；当前页签也一起记住
         for var in (self.gen_dir_var, self.gen_name_var, self.gen_prefix_var,
-                    self.gen_start_var, self.dec_rec_var):
+                    self.gen_start_var, self.gen_w_var, self.gen_h_var,
+                    self.dec_rec_var):
             var.trace_add("write", self._schedule_save)
         nb.bind("<<NotebookTabChanged>>", self._schedule_save)
         if self.cfg["tab"] == 1:
@@ -1436,37 +1503,22 @@ class BatchWindow:
         Btn(row, self.ui, "粘贴", self.paste_lines, pt=9).pack(side="left", padx=(P(5), 0))
         Btn(row, self.ui, "清空", self.clear_lines, pt=9).pack(side="left", padx=(P(5), 0))
 
-        # ===== 左：输出位置 =====
-        tk.Frame(fixed, bg=DIVIDER, height=1, highlightthickness=0,
-                 bd=0).pack(fill="x", padx=P(10), pady=(0, P(8)))
-        self._label(fixed, "输出位置", bold=True, anchor="w").pack(fill="x", padx=P(10))
-        drow = tk.Frame(fixed, bg=CARD)
-        drow.pack(fill="x", padx=P(10), pady=(P(6), 0))
-        self.gen_dir_var = tk.StringVar(
-            value=self.cfg["gen_dir"] or default_out_dir())
-        ttk.Entry(drow, textvariable=self.gen_dir_var, font=(FONT, 9)).pack(
-            side="left", fill="x", expand=True, padx=(0, P(5)))
-        Btn(drow, self.ui, "浏览", self.choose_dir, pt=9).pack(side="left")
+        # 输出位置改到点「导出」时现选；这里只记住上次位置给选择框定位
+        self.gen_dir_var = tk.StringVar(value=self.cfg["gen_dir"])
 
-        orow = tk.Frame(fixed, bg=CARD)
-        orow.pack(fill="x", padx=P(10), pady=(P(8), 0))
-        self._label(orow, "命名", muted=True, side="left")
+        # 命名 / 前缀 / 起始序号 / 图片宽高收进「更多设置」弹窗；
+        # 变量仍在主窗口创建，弹窗只是绑定同一批 StringVar 的另一套控件，
+        # 所以设置记忆、生成逻辑、双击复制全都不用改。
+        self.gen_w_var = tk.StringVar(value=self.cfg["gen_w"])
+        self.gen_h_var = tk.StringVar(value=self.cfg["gen_h"])
         self.gen_name_var = tk.StringVar(value=self.cfg["gen_name"])
-        ttk.Combobox(orow, textvariable=self.gen_name_var, state="readonly",
-                     values=["内容命名", "序号命名"], width=9,
-                     font=(FONT, 9)).pack(side="left", padx=P(5))
-        self._label(orow, "前缀", muted=True).pack(side="left", padx=(P(8), 0))
         self.gen_prefix_var = tk.StringVar(value=self.cfg["gen_prefix"])
-        ttk.Entry(orow, textvariable=self.gen_prefix_var, width=7,
-                  font=(FONT, 9)).pack(side="left", padx=(P(4), 0))
-
-        nrow = tk.Frame(fixed, bg=CARD)
-        nrow.pack(fill="x", padx=P(10), pady=(P(8), P(12)))
-        self._label(nrow, "起始序号", muted=True, side="left")
         self.gen_start_var = tk.StringVar(value=self.cfg["gen_start"])
-        ttk.Entry(nrow, textvariable=self.gen_start_var, width=6,
-                  font=(FONT, 9)).pack(side="left", padx=(P(5), 0))
-        tk.Label(nrow, text="PNG · H 级纠错", bg=CARD, fg=MUTED,
+
+        mrow = tk.Frame(fixed, bg=CARD)
+        mrow.pack(fill="x", padx=P(10), pady=(P(8), P(12)))
+        Btn(mrow, self.ui, "更多设置", self.open_more_settings, pt=9).pack(side="left")
+        tk.Label(mrow, text="PNG · H 级纠错", bg=CARD, fg=MUTED,
                  font=(FONT, 9), highlightthickness=0).pack(side="right")
 
         # 输入区最后打包，占满剩余空间并可自由伸缩
@@ -1503,7 +1555,8 @@ class BatchWindow:
         self.gen_start_btn.pack(side="left")
         self.gen_cancel_btn = Btn(row, self.ui, "取消", self.cancel_job)
         self.gen_cancel_btn.pack(side="left", padx=(P(6), 0))
-        Btn(row, self.ui, "打开目录", self.open_out_dir).pack(side="left", padx=(P(6), 0))
+        self.gen_export_btn = Btn(row, self.ui, "导出", self.export_gen_images)
+        self.gen_export_btn.pack(side="left", padx=(P(6), 0))
         self.gen_cancel_btn.set_enabled(False)
 
     def _build_dec(self, parent):
@@ -1584,7 +1637,7 @@ class BatchWindow:
         else:
             msg = f"完成：成功 {ok} 项，失败 {bad} 项"
             if kind == "gen":
-                msg += f" → {self._gen_dir}"
+                msg = f"已生成 {ok} 张（待导出），失败 {bad} 项"
         self._set_running(kind, False)
         self._status(kind, msg)
 
@@ -1610,6 +1663,8 @@ class BatchWindow:
             "gen_name": self.gen_name_var.get(),
             "gen_prefix": self.gen_prefix_var.get(),
             "gen_start": self.gen_start_var.get(),
+            "gen_w": self.gen_w_var.get(),
+            "gen_h": self.gen_h_var.get(),
             "dec_rec": bool(self.dec_rec_var.get()),
             "export_ext": self._last_export,
             "tab": self._cur_tab(),
@@ -1637,6 +1692,7 @@ class BatchWindow:
         """关闭唯一主窗口 = 退出程序。"""
         self._cancel = True
         self._save_ready = False
+        self.close_more_settings()
         if self._save_job is not None:
             try:
                 self.win.after_cancel(self._save_job)
@@ -1733,24 +1789,146 @@ class BatchWindow:
         self.gen_text.delete("1.0", "end")
         self.update_gen_count()
 
-    def choose_dir(self):
-        if self._running:
-            return
-        d = filedialog.askdirectory(parent=self.win, title="选择输出目录",
-                                    initialdir=self.gen_dir_var.get())
-        if d:
-            self.gen_dir_var.set(d)
+    # ------------------------------------------------------------------
+    # 更多设置：独立小弹窗，由生成页按钮显示 / 收起（非模态）
+    # ------------------------------------------------------------------
+    def open_more_settings(self):
+        """再点一次按钮即收起；不设模态，弹窗开着也能继续用主窗口。"""
+        w = self._more_win
+        if w is not None:
+            try:
+                if w.winfo_exists():
+                    self.close_more_settings()
+                    return
+            except tk.TclError:
+                pass
+        self._more_win = self._make_more_window()
 
-    def open_out_dir(self):
-        d = self.gen_dir_var.get().strip()
-        if not os.path.isdir(d):
-            messagebox.showwarning("提示", "输出目录还不存在，请先生成二维码",
+    def close_more_settings(self):
+        w, self._more_win = self._more_win, None
+        if w is not None:
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
+
+    def _make_more_window(self):
+        P = self.P
+        win = tk.Toplevel(self.win)
+        win.title("更多设置")
+        win.configure(bg=BG)
+        win.transient(self.win)
+        win.resizable(False, False)
+        w, h = P(360), P(250)
+        x = self.win.winfo_rootx() + (self.win.winfo_width() - w) // 2
+        y = self.win.winfo_rooty() + (self.win.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+        win.protocol("WM_DELETE_WINDOW", self.close_more_settings)
+
+        head = tk.Frame(win, bg=BG)
+        head.pack(fill="x", padx=P(14), pady=(P(12), P(8)))
+        tk.Label(head, text="更多设置", bg=BG, fg=TEXT,
+                 font=(FONT, 12, "bold"),
+                 highlightthickness=0).pack(side="left")
+        tk.Label(head, text="改动生成时生效，并自动记住", bg=BG, fg=MUTED,
+                 font=(FONT, 9), highlightthickness=0).pack(side="left", padx=(P(10), 0))
+
+        card = tk.Frame(win, bg=CARD, highlightthickness=1,
+                        highlightbackground=BORDER, highlightcolor=BORDER, bd=0)
+        card.pack(fill="both", expand=True, padx=P(14), pady=(0, P(10)))
+
+        r1 = tk.Frame(card, bg=CARD)
+        r1.pack(fill="x", padx=P(12), pady=(P(12), P(8)))
+        self._label(r1, "图片大小", muted=True, side="left")
+        tk.Label(r1, text="宽", bg=CARD, fg=MUTED, font=(FONT, 9),
+                 highlightthickness=0).pack(side="left", padx=(P(10), P(2)))
+        ttk.Entry(r1, textvariable=self.gen_w_var, width=6,
+                  font=(FONT, 9)).pack(side="left")
+        tk.Label(r1, text="高", bg=CARD, fg=MUTED, font=(FONT, 9),
+                 highlightthickness=0).pack(side="left", padx=(P(8), P(2)))
+        ttk.Entry(r1, textvariable=self.gen_h_var, width=6,
+                  font=(FONT, 9)).pack(side="left")
+        tk.Label(r1, text="px", bg=CARD, fg=MUTED, font=(FONT, 9),
+                 highlightthickness=0).pack(side="left", padx=(P(5), 0))
+
+        r2 = tk.Frame(card, bg=CARD)
+        r2.pack(fill="x", padx=P(12), pady=P(8))
+        self._label(r2, "命名", muted=True, side="left")
+        ttk.Combobox(r2, textvariable=self.gen_name_var, state="readonly",
+                     values=["内容命名", "序号命名"], width=9,
+                     font=(FONT, 9)).pack(side="left", padx=(P(26), 0))
+        self._label(r2, "前缀", muted=True).pack(side="left", padx=(P(10), 0))
+        ttk.Entry(r2, textvariable=self.gen_prefix_var, width=7,
+                  font=(FONT, 9)).pack(side="left", padx=(P(4), 0))
+
+        r3 = tk.Frame(card, bg=CARD)
+        r3.pack(fill="x", padx=P(12), pady=(P(8), P(12)))
+        self._label(r3, "起始序号", muted=True, side="left")
+        ttk.Entry(r3, textvariable=self.gen_start_var, width=6,
+                  font=(FONT, 9)).pack(side="left", padx=(P(12), 0))
+
+        foot = tk.Frame(win, bg=BG)
+        foot.pack(fill="x", padx=P(14), pady=(0, P(12)))
+        Btn(foot, self.ui, "完成", self.close_more_settings,
+            kind="primary", pt=9).pack(side="right")
+        win.focus_set()
+        return win
+
+    def export_gen_images(self):
+        """点「导出」时先选位置，再把内存里的二维码 PNG 写盘。"""
+        if self._running:
+            messagebox.showinfo("提示", "正在生成中，请等这一批生成完成后再导出",
+                                parent=self.win)
+            return
+        rows = [r for r in self.gen_rows
+                if r.get("tag") == "ok" and r.get("png")]
+        if not rows:
+            messagebox.showwarning("提示", "没有可导出的图片，请先点「开始生成」",
                                    parent=self.win)
             return
+        # 每次导出都现场选位置；默认停在上次导出的目录
+        initial = self.gen_dir_var.get().strip() or default_out_dir()
+        if not os.path.isdir(initial):
+            initial = os.path.expanduser("~")
+        outdir = filedialog.askdirectory(
+            parent=self.win, title="选择导出位置", initialdir=initial)
+        if not outdir:
+            self._status("gen", "已取消导出，图片仍在内存中")
+            return
+        outdir = os.path.abspath(outdir)
+        self.gen_dir_var.set(outdir)      # 记住本次位置，下次选择框直接停这里
         try:
-            os.startfile(d)          # Windows 资源管理器
-        except Exception:
-            webbrowser.open(d)
+            os.makedirs(outdir, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("导出位置不可用", str(e), parent=self.win)
+            return
+        used, n = set(), 0
+        try:
+            for r in rows:
+                name = r.get("name") or f"qrcode_{r['idx']:03d}.png"
+                base, ext = os.path.splitext(name)
+                k, low = 2, name.lower()
+                path = os.path.join(outdir, name)
+                # 同名不覆盖：磁盘上已有、或本批次刚写过都自动加后缀
+                while os.path.exists(path) or low in used:
+                    name = f"{base}_{k}{ext}"
+                    low, k = name.lower(), k + 1
+                    path = os.path.join(outdir, name)
+                used.add(low)
+                with open(path, "wb") as f:
+                    f.write(r["png"])
+                r["file"] = path
+                r["status"] = "已导出"
+                n += 1
+        except OSError as e:
+            messagebox.showerror("导出失败", str(e), parent=self.win)
+            return
+        kids = self.gen_tree.get_children()
+        for i, r in enumerate(self.gen_rows):
+            if i < len(kids) and r.get("file"):
+                self.gen_tree.set(kids[i], "status", "已导出")
+                self.gen_tree.set(kids[i], "file", os.path.basename(r["file"]))
+        self._status("gen", f"已导出 {n} 张 → {outdir}")
 
     def _unique_name(self, i, text):
         prefix = self.gen_prefix_var.get().strip()
@@ -1774,25 +1952,29 @@ class BatchWindow:
             messagebox.showwarning("提示", "请先输入或导入要生成的内容（每行一条）",
                                    parent=self.win)
             return
-        outdir = self.gen_dir_var.get().strip()
-        if not outdir:
-            messagebox.showwarning("提示", "请先选择输出目录", parent=self.win)
-            return
-        try:
-            os.makedirs(outdir, exist_ok=True)
-        except OSError as e:
-            messagebox.showerror("输出目录不可用", str(e), parent=self.win)
-            return
+        # 生成阶段只把 PNG 留在内存；导出位置在点「导出」时才选
         try:
             start = max(0, int(self.gen_start_var.get().strip()))
         except ValueError:
             start = 1
 
-        self._gen_dir = outdir
+        try:
+            w = int(self.gen_w_var.get().strip())
+            h = int(self.gen_h_var.get().strip())
+        except ValueError:
+            w = h = 0
+        if not (GEN_SIZE_MIN <= w <= GEN_SIZE_MAX
+                and GEN_SIZE_MIN <= h <= GEN_SIZE_MAX):
+            messagebox.showwarning(
+                "提示", f"图片宽高需为 {GEN_SIZE_MIN}–{GEN_SIZE_MAX} 的整数",
+                parent=self.win)
+            return
+
         self._gen_start = start
+        self._gen_w, self._gen_h = w, h
         self._gen_tasks = lines
         self._gen_index = 0
-        self._gen_used = {f.lower() for f in os.listdir(outdir)}  # 不覆盖已有文件
+        self._gen_used = set()   # 导出时才按目标目录已有文件避开同名
         self.gen_rows = []
         self.gen_tree.delete(*self.gen_tree.get_children())
         self._set_running("gen", True)
@@ -1809,18 +1991,21 @@ class BatchWindow:
                 break
             i = self._gen_index
             text = self._gen_tasks[i]
-            path, tag = "", "err"
+            name, png, tag = "", b"", "err"
             try:
-                img = make_qr_image(text)
-                path = os.path.join(self._gen_dir, self._unique_name(i, text))
-                img.save(path, "PNG")
-                status, tag = "成功", "ok"
+                img = make_qr_image(text, self._gen_w, self._gen_h)
+                buf = io.BytesIO()
+                img.save(buf, "PNG")
+                png = buf.getvalue()
+                name = self._unique_name(i, text)
+                status, tag = "待导出", "ok"
             except Exception as e:
-                status, path = f"失败：{e}", ""
+                status, name = f"失败：{e}", ""
             self.gen_rows.append({"idx": i + 1, "content": text,
-                                  "status": status, "file": path, "tag": tag})
+                                  "status": status, "name": name,
+                                  "file": "", "png": png, "tag": tag})
             self.gen_tree.insert("", "end",
-                                 values=(i + 1, text, status, os.path.basename(path)),
+                                 values=(i + 1, text, status, name),
                                  tags=(tag,))
             self._gen_index += 1
         self.gen_tree.yview_moveto(1)
@@ -2015,14 +2200,13 @@ class BatchWindow:
         if i >= len(self.gen_rows):
             return
         row = self.gen_rows[i]
-        path = row.get("file", "")
-        # 只复制确实生成成功的行；失败 / 文件已被删掉不覆盖剪贴板。
-        if (row.get("tag") != "ok" or not path
-                or not os.path.isfile(path)):
+        # 图片保存在内存里，导出前也能直接双击复制，不依赖磁盘文件
+        png = row.get("png", b"")
+        if row.get("tag") != "ok" or not png:
             self._status("gen", f"第 {i + 1} 行没有生成图片")
             return
         try:
-            with Image.open(path) as im:
+            with Image.open(io.BytesIO(png)) as im:
                 img = im.convert("RGB")
                 img.load()
         except Exception as e:
@@ -2068,15 +2252,14 @@ class BatchWindow:
 
     def export_dec(self):
         self.export_rows(
-            "批量识别结果", ("序号", "文件名", "状态", "识别结果"),
-            [(r["idx"], r["file"], r["status"], r["result"])
-             for r in self.dec_rows], "dec")
+            "批量识别结果", ("文件名", "识别结果"),
+            [(r["file"], r["result"]) for r in self.dec_rows], "dec")
 
     # ------------------------------------------------------------------
     # 导出 / 拖拽
     # ------------------------------------------------------------------
     def export_rows(self, title, header, rows, kind, text_col=-1):
-        """表格格式（CSV/Excel）写四列；Word/TXT 只写正文列，一行一条。"""
+        """表格格式（CSV/Excel）写「文件名 + 识别结果」两列；Word/TXT 只写正文列，一行一条。"""
         if not rows:
             messagebox.showwarning("提示", "还没有可导出的结果", parent=self.win)
             return
@@ -2125,7 +2308,7 @@ class BatchWindow:
         self._schedule_save()
         fmt = f"{EXPORT_LABEL_BY_EXT[ext]}（{ext}）"
         if plain is None:
-            count, note = f"{len(rows)} 条记录", "含四列表格"
+            count, note = f"{len(rows)} 条记录", "两列：文件名、识别结果"
         else:
             count = f"{len(plain)} 条识别内容"
             note = "一行一条，未识别的已跳过"

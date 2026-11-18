@@ -8,6 +8,7 @@ import subprocess
 import datetime
 import json
 import os
+import ctypes
 import tempfile
 from unittest import mock
 
@@ -173,6 +174,34 @@ with mock.patch.object(main.subprocess, "run", fake_run), \
     check("下拉框聚焦/悬停状态已配置",
           "bordercolor" in ui_style.map("Card.TCombobox")
           and "arrowcolor" in ui_style.map("Card.TCombobox"))
+
+    # 1d. 图标：文件在、ico 多尺寸、运行时真正设到窗口上
+    ico_path = main.resource_path("icon.ico")
+    ico_ok = os.path.exists(ico_path) and os.path.getsize(ico_path) > 1024
+    check("icon.ico 存在且非空", ico_ok, ico_path)
+
+    ico_sizes = []
+    if ico_ok:
+        from PIL import Image
+        with Image.open(ico_path) as im:
+            ico_sizes = sorted(im.info.get("sizes", []))
+    check("ico 含 16/32/48/256 多尺寸",
+          all((n, n) in ico_sizes for n in (16, 32, 48, 256)), str(ico_sizes))
+
+    # Tk 9 里 wm iconbitmap 设完再查询会返回空字符串，没法用查询判断；
+    # 直接问 Windows：WM_GETICON 返回非 0 句柄才说明图标真挂上去了
+    root.update()
+    hwnd = int(root.wm_frame(), 16)
+    big_icon = ctypes.windll.user32.SendMessageW(hwnd, 0x7F, 1, 0)  # WM_GETICON, ICON_BIG
+    small_icon = ctypes.windll.user32.SendMessageW(hwnd, 0x7F, 0, 0)
+    check("窗口图标真的挂到窗口上（WM_GETICON 非 0）",
+          big_icon != 0 and small_icon != 0, f"big={big_icon} small={small_icon}")
+
+    # 源码运行时资源路径应指向脚本目录（打包后才是 _MEIPASS 临时目录）
+    check("resource_path 未打包时指向脚本目录",
+          os.path.dirname(main.resource_path("icon.ico"))
+          == os.path.dirname(os.path.abspath(main.__file__)),
+          main.resource_path("icon.ico"))
 
     # 1. 初始状态
     check("初始状态为未设置", app.status_label["text"] == "未设置关机")
