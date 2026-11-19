@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>删除确认弹窗 · 预览</title>
+<link rel="stylesheet" href="../popup.css">
+<style>
+  body {
+    width: auto; min-height: 100vh; background: #e8ecf2;
+    display: flex; align-items: center; justify-content: center; padding: 28px;
+  }
+  .preview {
+    width: 380px; background: var(--bg); border-radius: 14px;
+    overflow: hidden; position: relative;
+    box-shadow: 0 16px 40px -12px rgba(15, 23, 42, .28);
+  }
+  .preview .modal { position: absolute; border-radius: 14px; }
+  .demo-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px; border: 1px solid var(--line); border-radius: 12px;
+    background: #fff; margin-bottom: 8px;
+  }
+  .demo-avatar {
+    width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%;
+    background: #2563eb; color: #fff; display: flex;
+    align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
+  }
+  .demo-name { font-size: 13px; font-weight: 600; }
+  .demo-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="preview">
+  <div class="app">
+    <header class="header">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 128 128" width="40" height="40">
+          <g fill="#ffffff" opacity=".68">
+            <circle cx="89" cy="56.5" r="12"/>
+            <path d="M68 90a21 21 0 0 1 42 0v4.4a4.1 4.1 0 0 1-4.1 4.1H72.1A4.1 4.1 0 0 1 68 94.4z"/>
+          </g>
+          <g fill="#ffffff">
+            <circle cx="44" cy="47" r="15.2"/>
+            <path d="M21 85.6a23 23 0 0 1 46 0v7.6a4.6 4.6 0 0 1-4.6 4.6H25.6A4.6 4.6 0 0 1 21 93.2z"/>
+          </g>
+        </svg>
+      </div>
+      <div class="header-text">
+        <h1>多账号切换器<span class="ver">v1.0.22</span></h1>
+        <p>当前网站：www.bilibili.com</p>
+      </div>
+      <button class="icon-btn" type="button">新增</button>
+    </header>
+
+    <section class="panel">
+      <div class="section-head">
+        <div class="section-title">已保存账号 <span class="count">2</span></div>
+      </div>
+      <div class="demo-card">
+        <div class="demo-avatar">哔</div>
+        <div>
+          <div class="demo-name">哔哩小号</div>
+          <div class="demo-meta">170 项 Cookie（bilibili.com 等 3 个域名）· 12 项设置</div>
+        </div>
+      </div>
+      <div class="demo-card">
+        <div class="demo-avatar">大</div>
+        <div>
+          <div class="demo-name">我的大号</div>
+          <div class="demo-meta">168 项 Cookie（bilibili.com 等 3 个域名）</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal">
+    <div class="modal-mask"></div>
+    <div class="modal-box" role="dialog" aria-modal="true">
+      <div class="modal-icon">!</div>
+      <h2 class="modal-title">删除「我的大号」？</h2>
+      <p class="modal-desc">删除后无法恢复，浏览器登录状态不受影响。</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button">取消</button>
+        <button class="btn btn-danger" type="button">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
