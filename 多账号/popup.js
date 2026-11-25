@@ -174,9 +174,6 @@ async function refresh() {
     state.currentId = res.currentId;
     state.siteKey = res.siteKey;
     state.accounts = res.accounts;
-    $('siteLabel').textContent = res.siteKey && res.siteKey !== state.hostname
-      ? `当前网站：${state.hostname} · 账号范围 ${res.siteKey}`
-      : `当前网站：${state.hostname}`;
   } else {
     showNotice(res.error || '读取账号失败');
   }
@@ -209,14 +206,12 @@ async function init() {
 
   const url = (tab && tab.url) || '';
   if (!hostname || !/^https?:$/.test(new URL(url).protocol)) {
-    $('siteLabel').textContent = '当前页面不支持';
     showNotice('请在普通的 http(s) 网站上使用；浏览器内置页面（chrome://、扩展商店等）无法读取 Cookie。');
     $('addBtn').disabled = true;
     render();
     return;
   }
 
-  $('siteLabel').textContent = '当前网站：' + hostname;
   await refresh();
 }
 
