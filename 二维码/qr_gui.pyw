@@ -8,6 +8,7 @@
 2. 二维码 → 文本（批量识别）：多张图片/文件夹批量识别并导出
 """
 
+import colorsys
 import csv
 import ctypes
 import io
@@ -23,7 +24,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import qrcode
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk, ImageGrab
+from PIL import (Image, ImageDraw, ImageFilter, ImageFont, ImageOps,
+                 ImageTk, ImageGrab)
 
 try:
     from pyzbar.pyzbar import decode as zbar_decode
@@ -97,8 +99,34 @@ EXPORT_LABEL_BY_EXT = {ext: label for label, ext in EXPORT_TYPES}
 GEN_SIZE_DEFAULT = 300
 GEN_SIZE_MIN = 100
 GEN_SIZE_MAX = 4000
-# 二维码黑白方块区域（不含静区）占图片较短边的比例，剩余部分作四周白边
+# 二维码方块区域（不含静区）占图片较短边的比例，剩余部分作四周边缘
 QR_FILL_RATIO = 0.90
+
+# 生成图片的前景 / 背景色，一律用 #RRGGBB；默认仍是黑块白底
+GEN_FORE_DEFAULT = "#000000"
+GEN_BACK_DEFAULT = "#FFFFFF"
+
+# 取色器底图尺寸（逻辑像素，实际会按 DPI 缩放）
+PICKER_AREA = (180, 120)     # 饱和度 × 明度 方块
+PICKER_HUE = 16              # 右侧色相条宽度
+
+
+def normalize_color(value, default: str = "") -> str:
+    """把用户输入的颜色规范成 #RRGGBB，认不出就返回 default（可能为空串）。
+
+    接受 #abc / abc / #AABBCC / AABBCC 四种写法，统一转大写，
+    方便手输；含非法字符或长度不对视为无效。
+    """
+    if not isinstance(value, str):
+        return default
+    v = value.strip()
+    if v.startswith("#"):
+        v = v[1:]
+    if len(v) == 3:
+        v = "".join(c * 2 for c in v)
+    if len(v) == 6 and all(c in "0123456789abcdefABCDEF" for c in v):
+        return "#" + v.upper()
+    return default
 
 # ----------------------------------------------------------------------
 # 上次设置：%APPDATA%\二维码工具\settings.json
@@ -113,6 +141,8 @@ SETTING_DEFAULTS = {
     "gen_start": "1",
     "gen_w": "300",
     "gen_h": "300",
+    "gen_fore": GEN_FORE_DEFAULT,
+    "gen_back": GEN_BACK_DEFAULT,
     "dec_rec": True,
     "export_ext": ".csv",
     "tab": 0,
@@ -163,6 +193,8 @@ def load_settings() -> dict:
         if not v.isdigit() or not (GEN_SIZE_MIN <= int(v) <= GEN_SIZE_MAX):
             v = str(GEN_SIZE_DEFAULT)
         cfg[key] = v
+    cfg["gen_fore"] = normalize_color(cfg["gen_fore"], GEN_FORE_DEFAULT)
+    cfg["gen_back"] = normalize_color(cfg["gen_back"], GEN_BACK_DEFAULT)
     cfg["dec_rec"] = bool(cfg["dec_rec"])
     if cfg["export_ext"] not in EXPORT_LABEL_BY_EXT:
         cfg["export_ext"] = ".csv"
@@ -307,12 +339,13 @@ def qr_side(width: int, height: int, modules: int) -> int:
     return min(side, short)
 
 
-def make_qr_image(link: str, width: int = 0, height: int = 0) -> "Image.Image":
-    """按工具统一参数生成二维码（UTF-8 字节写入、H 级纠错、白底黑块）。
+def make_qr_image(link: str, width: int = 0, height: int = 0,
+                  fore: str = "#000000", back: str = "#FFFFFF") -> "Image.Image":
+    """按工具统一参数生成二维码（UTF-8 字节写入、H 级纠错、前景/背景色可换）。
 
-    width / height > 0 时输出严格为该宽高的图片：黑白方块区域保持正方形并
-    占较短边 90%，居中贴到白底画布，余下的白边即静区，不拉伸变形。
-    先用整数 box_size 无静区重绘，再 NEAREST 微调到精确边长，全程纯黑白、
+    width / height > 0 时输出严格为该宽高的图片：方块区域保持正方形并占
+    较短边 90%，居中贴到背景色画布，余下的边缘即静区，不拉伸变形。
+    先用整数 box_size 无静区重绘，再 NEAREST 微调到精确边长，全程纯色块、
     不产生插值灰边。内容长到每模块不足 2 像素时保持 1 像素/模块原样
     （占比会小于 90%，优先保证能识别）。两者为 0 时沿用 box_size=10。
     """
@@ -322,7 +355,7 @@ def make_qr_image(link: str, width: int = 0, height: int = 0) -> "Image.Image":
         qr = qrcode.QRCode(error_correction=err, box_size=10, border=4)
         qr.add_data(data)
         qr.make(fit=True)
-        return qr.make_image(fill_color="black", back_color="white").convert("RGB")
+        return qr.make_image(fill_color=fore, back_color=back).convert("RGB")
 
     probe = qrcode.QRCode(error_correction=err, box_size=1, border=0)
     probe.add_data(data)
@@ -330,11 +363,11 @@ def make_qr_image(link: str, width: int = 0, height: int = 0) -> "Image.Image":
     modules = probe.modules_count
     side = qr_side(width, height, modules)
     box_size = max(1, int(side / modules + 0.5))
-    # border=0：只画黑白方块，静区由画布留白提供，避免静区吃掉 90% 的份额
+    # border=0：只画方块图案，静区由画布同色边距提供，避免静区吃掉 90% 的份额
     qr = qrcode.QRCode(error_correction=err, box_size=box_size, border=0)
     qr.add_data(data)
     qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    img = qr.make_image(fill_color=fore, back_color=back).convert("RGB")
     if box_size >= 2 and img.width != side:
         # 整数倍重绘后的边长与 90% 目标略有出入，NEAREST 精确微调
         img = img.resize((side, side), Image.NEAREST)
@@ -343,7 +376,7 @@ def make_qr_image(link: str, width: int = 0, height: int = 0) -> "Image.Image":
         short = min(width, height)
         img = img.resize((short, short), Image.NEAREST)
     # box_size == 1 时保持原样：把 1px/模块放大反而会破坏定位图形比例
-    canvas = Image.new("RGB", (width, height), "white")
+    canvas = Image.new("RGB", (width, height), back)
     canvas.paste(img, ((width - img.width) // 2, (height - img.height) // 2))
     return canvas
 
@@ -357,6 +390,16 @@ def decode_qr_image(img: "Image.Image") -> list:
         # 放大重试：用 NEAREST 避免插值灰边导致误识别
         big = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
         results = zbar_decode(big)
+    if not results:
+        # 深色底 + 浅色块（反色码）：zbar 只认深块浅底，四周偏暗时翻转再试
+        rgb = img.convert("RGB")
+        corners = [rgb.getpixel(p) for p in
+                   ((0, 0), (rgb.width - 1, 0),
+                    (0, rgb.height - 1), (rgb.width - 1, rgb.height - 1))]
+        if sum(sum(p) for p in corners) / 12 < 128:
+            inv = ImageOps.invert(rgb)
+            results = zbar_decode(inv) or zbar_decode(
+                inv.resize((inv.width * 2, inv.height * 2), Image.NEAREST))
     return [smart_decode(r.data) for r in results]
 
 
@@ -1297,6 +1340,9 @@ class BatchWindow:
         self._gen_start = 1
         self._gen_w = 0
         self._gen_h = 0
+        self._gen_fore = GEN_FORE_DEFAULT
+        self._gen_back = GEN_BACK_DEFAULT
+        self._gen_spec_cur = None    # 最近一次生成用的 (宽, 高, 前景, 背景)
         self._dec_index = 0
         self._more_win = None        # 「更多设置」小弹窗（唯一实例）
 
@@ -1435,6 +1481,7 @@ class BatchWindow:
         # 设置变化后延迟落盘；当前页签也一起记住
         for var in (self.gen_dir_var, self.gen_name_var, self.gen_prefix_var,
                     self.gen_start_var, self.gen_w_var, self.gen_h_var,
+                    self.gen_fore_var, self.gen_back_var,
                     self.dec_rec_var):
             var.trace_add("write", self._schedule_save)
         nb.bind("<<NotebookTabChanged>>", self._schedule_save)
@@ -1514,6 +1561,8 @@ class BatchWindow:
         self.gen_name_var = tk.StringVar(value=self.cfg["gen_name"])
         self.gen_prefix_var = tk.StringVar(value=self.cfg["gen_prefix"])
         self.gen_start_var = tk.StringVar(value=self.cfg["gen_start"])
+        self.gen_fore_var = tk.StringVar(value=self.cfg["gen_fore"])
+        self.gen_back_var = tk.StringVar(value=self.cfg["gen_back"])
 
         mrow = tk.Frame(fixed, bg=CARD)
         mrow.pack(fill="x", padx=P(10), pady=(P(8), P(12)))
@@ -1665,6 +1714,10 @@ class BatchWindow:
             "gen_start": self.gen_start_var.get(),
             "gen_w": self.gen_w_var.get(),
             "gen_h": self.gen_h_var.get(),
+            "gen_fore": normalize_color(self.gen_fore_var.get(),
+                                        GEN_FORE_DEFAULT),
+            "gen_back": normalize_color(self.gen_back_var.get(),
+                                        GEN_BACK_DEFAULT),
             "dec_rec": bool(self.dec_rec_var.get()),
             "export_ext": self._last_export,
             "tab": self._cur_tab(),
@@ -1806,11 +1859,230 @@ class BatchWindow:
 
     def close_more_settings(self):
         w, self._more_win = self._more_win, None
+        # 弹窗销毁后色块不再存在，先把联动回调撤掉，避免往已销毁控件写属性
+        for var, tid in getattr(self, "_color_traces", ()):
+            try:
+                var.trace_remove("write", tid)
+            except (tk.TclError, ValueError):
+                pass
+        self._color_traces = []
         if w is not None:
             try:
                 w.destroy()
             except tk.TclError:
                 pass
+
+    def _color_swatch(self, parent, var, default, title):
+        """小色块：点一下打开取色器；输入框改颜色时色块跟着变。"""
+        box = tk.Label(parent, width=2, bg=normalize_color(var.get(), default),
+                       highlightthickness=1, highlightbackground=BORDER,
+                       bd=0, cursor="hand2", padx=self.P(2), pady=self.P(2))
+
+        def pick(_event=None):
+            self._pick_color(var, default, title)
+
+        def sync(*_args):
+            try:
+                box.configure(bg=normalize_color(var.get(), default))
+            except tk.TclError:
+                pass
+
+        box.bind("<Button-1>", pick)
+        self._color_traces.append((var, var.trace_add("write", sync)))
+        return box
+
+    def _pick_color(self, var, default, title):
+        """自绘取色器：左侧饱和度/明度方块 + 右侧色相条，可点选或拖动。
+
+        右下角同步显示当前色的预览与 #RRGGBB；也能直接改色值，
+        色相条和方块会跟着跳到该颜色（灰色没有色相，保留原来的位置）。
+        """
+        parent = self._more_win if self._more_win is not None else self.win
+        P = self.P
+        cur = normalize_color(var.get(), default)
+        r0, g0, b0 = (int(cur[1:3], 16), int(cur[3:5], 16), int(cur[5:7], 16))
+        h0, s0, v0 = colorsys.rgb_to_hsv(r0 / 255, g0 / 255, b0 / 255)
+
+        win = tk.Toplevel(parent)
+        win.title(f"选择{title}")
+        win.configure(bg=BG)
+        win.transient(parent)
+        win.resizable(False, False)
+
+        SW, SH = P(PICKER_AREA[0]), P(PICKER_AREA[1])
+        HW = P(PICKER_HUE)
+
+        card = tk.Frame(win, bg=CARD, highlightthickness=1,
+                        highlightbackground=BORDER, bd=0)
+        card.pack(fill="both", expand=True, padx=P(10), pady=P(10))
+
+        body = tk.Frame(card, bg=CARD)
+        body.pack(padx=P(12), pady=(P(12), P(8)))
+        area = tk.Canvas(body, width=SW, height=SH, bg=CARD, bd=0,
+                         highlightthickness=1, highlightbackground=BORDER,
+                         cursor="crosshair", takefocus=0)
+        area.grid(row=0, column=0, sticky="nw")
+        hue = tk.Canvas(body, width=HW, height=SH, bg=CARD, bd=0,
+                        highlightthickness=1, highlightbackground=BORDER,
+                        cursor="hand2", takefocus=0)
+        hue.grid(row=0, column=1, padx=(P(8), 0), sticky="nw")
+
+        row = tk.Frame(card, bg=CARD)
+        row.pack(fill="x", padx=P(12), pady=(P(2), P(12)))
+        preview = tk.Label(row, width=3, bg=cur, highlightthickness=1,
+                           highlightbackground=BORDER, bd=0,
+                           padx=P(2), pady=P(2))
+        preview.pack(side="left")
+        entry_var = tk.StringVar(value=cur)
+        ttk.Entry(row, textvariable=entry_var, width=9,
+                  font=(FONT, 9)).pack(side="left", padx=(P(6), 0))
+
+        state = {"h": h0, "s": s0, "v": v0}
+        busy = [False]
+        area._photo = None       # 挂在控件上，避免 PhotoImage 被回收后底图变白
+        hue._photo = None
+
+        def to_hex():
+            rr, gg, bb = colorsys.hsv_to_rgb(state["h"], state["s"], state["v"])
+            return "#%02X%02X%02X" % (int(rr * 255 + 0.5),
+                                     int(gg * 255 + 0.5),
+                                     int(bb * 255 + 0.5))
+
+        def draw_area():
+            # 同一色相下 hsv(h,s,v) 只是 hsv(h,s,1) 乘上明度，先按列算再逐行压暗
+            img = Image.new("RGB", (SW, SH))
+            px = img.load()
+            cols = [colorsys.hsv_to_rgb(state["h"], x / max(1, SW - 1), 1.0)
+                    for x in range(SW)]
+            for y in range(SH):
+                vv = 1 - y / max(1, SH - 1)
+                for x in range(SW):
+                    rr, gg, bb = cols[x]
+                    px[x, y] = (int(rr * 255 * vv + 0.5),
+                                int(gg * 255 * vv + 0.5),
+                                int(bb * 255 * vv + 0.5))
+            area._photo = ImageTk.PhotoImage(img)
+            area.delete("bg")
+            area.create_image(0, 0, anchor="nw", image=area._photo, tags="bg")
+            area.tag_lower("bg")
+
+        def draw_hue():
+            img = Image.new("RGB", (HW, SH))
+            px = img.load()
+            for y in range(SH):
+                rr, gg, bb = colorsys.hsv_to_rgb(y / max(1, SH - 1), 1.0, 1.0)
+                for x in range(HW):
+                    px[x, y] = (int(rr * 255 + 0.5), int(gg * 255 + 0.5),
+                                int(bb * 255 + 0.5))
+            hue._photo = ImageTk.PhotoImage(img)
+            hue.delete("bg")
+            hue.create_image(0, 0, anchor="nw", image=hue._photo, tags="bg")
+            hue.tag_lower("bg")
+
+        def draw_marks():
+            r = max(2, P(4))
+            cx = state["s"] * (SW - 1)
+            cy = (1 - state["v"]) * (SH - 1)
+            area.delete("mk")
+            area.create_oval(cx - r, cy - r, cx + r, cy + r,
+                             outline="#000000", width=1, tags="mk")
+            area.create_oval(cx - r + 1, cy - r + 1, cx + r - 1, cy + r - 1,
+                             outline="#FFFFFF", width=max(1, P(2)), tags="mk")
+            hy = state["h"] * (SH - 1)
+            hue.delete("mk")
+            hue.create_rectangle(0, hy - P(2), HW - 1, hy + P(2),
+                                 outline="#000000", width=1, tags="mk")
+            hue.create_rectangle(1, hy - P(1), HW - 2, hy + P(1),
+                                 outline="#FFFFFF", width=1, tags="mk")
+
+        def sync_view():
+            hexval = to_hex()
+            try:
+                preview.configure(bg=hexval)
+            except tk.TclError:
+                return
+            if entry_var.get().upper() != hexval:
+                busy[0] = True
+                entry_var.set(hexval)
+                busy[0] = False
+
+        def set_sv(event):
+            state["s"] = min(1.0, max(0.0, event.x / max(1, SW - 1)))
+            state["v"] = min(1.0, max(0.0, 1 - event.y / max(1, SH - 1)))
+            draw_marks()
+            sync_view()
+
+        def set_hue(event):
+            state["h"] = min(1.0, max(0.0, event.y / max(1, SH - 1)))
+            draw_area()          # 换色相才需要重画方块，拖动时也只重画这一张
+            draw_marks()
+            sync_view()
+
+        def on_entry(*_args):
+            if busy[0]:
+                return
+            c = normalize_color(entry_var.get())
+            if not c:
+                return
+            rr = int(c[1:3], 16) / 255
+            gg = int(c[3:5], 16) / 255
+            bb = int(c[5:7], 16) / 255
+            hh, ss, vv = colorsys.rgb_to_hsv(rr, gg, bb)
+            old_h = state["h"]
+            state["h"], state["s"], state["v"] = hh, ss, vv
+            if ss < 1e-6:        # 灰阶没有色相，保留原色相免得色相条跳回红端
+                state["h"] = old_h
+            if abs(state["h"] - old_h) > 1e-6:
+                draw_area()
+            draw_marks()
+            try:
+                preview.configure(bg=c)
+            except tk.TclError:
+                pass
+
+        area.bind("<Button-1>", set_sv)
+        area.bind("<B1-Motion>", set_sv)
+        hue.bind("<Button-1>", set_hue)
+        hue.bind("<B1-Motion>", set_hue)
+        entry_var.trace_add("write", on_entry)
+
+        def confirm():
+            c = normalize_color(entry_var.get())
+            if not c:
+                messagebox.showwarning("提示", "颜色格式需为 #RRGGBB 或 #RGB",
+                                       parent=win)
+                return
+            self._apply_color(var, c, win)
+
+        Btn(row, self.ui, "取消", win.destroy, pt=9).pack(side="right")
+        Btn(row, self.ui, "确定", confirm, kind="primary",
+            pt=9).pack(side="right", padx=(0, P(6)))
+
+        draw_area()
+        draw_hue()
+        draw_marks()
+        sync_view()
+
+        # 内容由控件自身撑开，再把窗口居中到「更多设置」上
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        win.grab_set()
+        return win
+
+    @staticmethod
+    def _apply_color(var, color, win):
+        """把选中的颜色写回变量并关掉调色板。"""
+        c = normalize_color(color)
+        if not c:
+            return
+        var.set(c)
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
 
     def _make_more_window(self):
         P = self.P
@@ -1819,23 +2091,16 @@ class BatchWindow:
         win.configure(bg=BG)
         win.transient(self.win)
         win.resizable(False, False)
-        w, h = P(360), P(250)
+        w, h = P(360), P(268)
         x = self.win.winfo_rootx() + (self.win.winfo_width() - w) // 2
         y = self.win.winfo_rooty() + (self.win.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
         win.protocol("WM_DELETE_WINDOW", self.close_more_settings)
 
-        head = tk.Frame(win, bg=BG)
-        head.pack(fill="x", padx=P(14), pady=(P(12), P(8)))
-        tk.Label(head, text="更多设置", bg=BG, fg=TEXT,
-                 font=(FONT, 12, "bold"),
-                 highlightthickness=0).pack(side="left")
-        tk.Label(head, text="改动生成时生效，并自动记住", bg=BG, fg=MUTED,
-                 font=(FONT, 9), highlightthickness=0).pack(side="left", padx=(P(10), 0))
-
+        # 弹窗标题栏已有「更多设置」，窗内不再重复大标题，直接给卡片留上边距
         card = tk.Frame(win, bg=CARD, highlightthickness=1,
                         highlightbackground=BORDER, highlightcolor=BORDER, bd=0)
-        card.pack(fill="both", expand=True, padx=P(14), pady=(0, P(10)))
+        card.pack(fill="both", expand=True, padx=P(14), pady=(P(12), P(10)))
 
         r1 = tk.Frame(card, bg=CARD)
         r1.pack(fill="x", padx=P(12), pady=(P(12), P(8)))
@@ -1862,29 +2127,72 @@ class BatchWindow:
                   font=(FONT, 9)).pack(side="left", padx=(P(4), 0))
 
         r3 = tk.Frame(card, bg=CARD)
-        r3.pack(fill="x", padx=P(12), pady=(P(8), P(12)))
+        r3.pack(fill="x", padx=P(12), pady=P(8))
         self._label(r3, "起始序号", muted=True, side="left")
         ttk.Entry(r3, textvariable=self.gen_start_var, width=6,
                   font=(FONT, 9)).pack(side="left", padx=(P(12), 0))
 
+        # 前景 / 背景色：色块点开取色器，也可直接手输 #RRGGBB（#abc 简写也认）
+        self._color_traces = []
+        r4 = tk.Frame(card, bg=CARD)
+        r4.pack(fill="x", padx=P(12), pady=(P(8), P(12)))
+        self._label(r4, "颜色", muted=True, side="left")
+        tk.Label(r4, text="前景", bg=CARD, fg=MUTED, font=(FONT, 9),
+                 highlightthickness=0).pack(side="left", padx=(P(16), P(5)))
+        self._color_swatch(r4, self.gen_fore_var, GEN_FORE_DEFAULT,
+                           "前景色").pack(side="left")
+        ttk.Entry(r4, textvariable=self.gen_fore_var, width=7,
+                  font=(FONT, 9)).pack(side="left", padx=(P(5), 0))
+        tk.Label(r4, text="背景", bg=CARD, fg=MUTED, font=(FONT, 9),
+                 highlightthickness=0).pack(side="left", padx=(P(10), P(5)))
+        self._color_swatch(r4, self.gen_back_var, GEN_BACK_DEFAULT,
+                           "背景色").pack(side="left")
+        ttk.Entry(r4, textvariable=self.gen_back_var, width=7,
+                  font=(FONT, 9)).pack(side="left", padx=(P(5), 0))
+
         foot = tk.Frame(win, bg=BG)
         foot.pack(fill="x", padx=P(14), pady=(0, P(12)))
+        tk.Label(foot, text="浅色块 + 深色底多数扫码器认不出", bg=BG, fg=MUTED,
+                 font=(FONT, 9), highlightthickness=0).pack(side="left")
         Btn(foot, self.ui, "完成", self.close_more_settings,
             kind="primary", pt=9).pack(side="right")
         win.focus_set()
         return win
 
     def export_gen_images(self):
-        """点「导出」时先选位置，再把内存里的二维码 PNG 写盘。"""
+        """点「导出」时先选位置，再把内存里的二维码 PNG 写盘。
+
+        宽高 / 前景色 / 背景色在「开始生成」之后被改过时，这里会按当前设置
+        把内存里的图重画一遍再写盘，避免导出的还是改色前的旧图。
+        """
         if self._running:
             messagebox.showinfo("提示", "正在生成中，请等这一批生成完成后再导出",
                                 parent=self.win)
             return
+        if not [r for r in self.gen_rows if r.get("tag") == "ok" and r.get("png")]:
+            messagebox.showwarning("提示", "没有可导出的图片，请先点「开始生成」",
+                                   parent=self.win)
+            return
+        spec = self._gen_spec()
+        if spec is None:
+            messagebox.showwarning(
+                "提示", "当前图片宽高或颜色设置有误，请到「更多设置」检查后再导出",
+                parent=self.win)
+            return
+        # 改过配色 / 尺寸的行先按当前设置重画，导出和双击复制才对得上
+        stale = [r for r in self.gen_rows
+                 if r.get("tag") == "ok" and r.get("spec") != spec]
+        redrawn = 0
+        if stale:
+            self._status("gen", f"正在按当前配色 / 尺寸重画 {len(stale)} 张…")
+            self.win.update_idletasks()
+            redrawn = self._refresh_gen_images(stale, spec)
         rows = [r for r in self.gen_rows
                 if r.get("tag") == "ok" and r.get("png")]
         if not rows:
-            messagebox.showwarning("提示", "没有可导出的图片，请先点「开始生成」",
-                                   parent=self.win)
+            messagebox.showwarning(
+                "提示", "按当前配色 / 尺寸重画失败，请检查内容或把宽高调大后再试",
+                parent=self.win)
             return
         # 每次导出都现场选位置；默认停在上次导出的目录
         initial = self.gen_dir_var.get().strip() or default_out_dir()
@@ -1928,7 +2236,54 @@ class BatchWindow:
             if i < len(kids) and r.get("file"):
                 self.gen_tree.set(kids[i], "status", "已导出")
                 self.gen_tree.set(kids[i], "file", os.path.basename(r["file"]))
-        self._status("gen", f"已导出 {n} 张 → {outdir}")
+        note = f"，其中 {redrawn} 张按当前配色 / 尺寸重画" if redrawn else ""
+        self._status("gen", f"已导出 {n} 张{note} → {outdir}")
+
+    def _gen_spec(self):
+        """当前「更多设置」里的出图参数 (宽, 高, 前景, 背景)，非法时返回 None。"""
+        try:
+            w = int(self.gen_w_var.get().strip())
+            h = int(self.gen_h_var.get().strip())
+        except (ValueError, tk.TclError):
+            return None
+        if not (GEN_SIZE_MIN <= w <= GEN_SIZE_MAX
+                and GEN_SIZE_MIN <= h <= GEN_SIZE_MAX):
+            return None
+        fore = normalize_color(self.gen_fore_var.get())
+        back = normalize_color(self.gen_back_var.get())
+        if not fore or not back or fore == back:
+            return None
+        return (w, h, fore, back)
+
+    def _render_row_png(self, row, spec):
+        """按指定参数重画一行，结果写回 row['png']。"""
+        w, h, fore, back = spec
+        img = make_qr_image(row["content"], w, h, fore, back)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        row["png"] = buf.getvalue()
+        row["spec"] = spec
+
+    def _refresh_gen_images(self, rows, spec):
+        """把改动过配色 / 尺寸的行按当前设置重画，返回成功的张数。
+
+        重画失败的置为「失败」并跳过导出，不影响其它行。
+        """
+        ok = 0
+        for r in rows:
+            try:
+                self._render_row_png(r, spec)
+                ok += 1
+            except Exception as e:
+                r["png"] = b""
+                r["tag"] = "err"
+                r["status"] = f"失败：{e}"
+        kids = self.gen_tree.get_children()
+        for i, r in enumerate(self.gen_rows):
+            if i < len(kids):
+                self.gen_tree.set(kids[i], "status", r["status"])
+                self.gen_tree.item(kids[i], tags=(r.get("tag", "err"),))
+        return ok
 
     def _unique_name(self, i, text):
         prefix = self.gen_prefix_var.get().strip()
@@ -1970,8 +2325,26 @@ class BatchWindow:
                 parent=self.win)
             return
 
+        fore = normalize_color(self.gen_fore_var.get())
+        back = normalize_color(self.gen_back_var.get())
+        if not fore or not back:
+            messagebox.showwarning(
+                "提示", "颜色格式不对：请填 #RRGGBB 或 #RGB，例如 #000000、#fff",
+                parent=self.win)
+            return
+        if fore == back:
+            messagebox.showwarning(
+                "提示", "前景色与背景色不能相同，否则二维码无法识别",
+                parent=self.win)
+            return
+        # 手输的简写 / 小写在这里统一成 #RRGGBB，界面回到规范写法
+        self.gen_fore_var.set(fore)
+        self.gen_back_var.set(back)
+
         self._gen_start = start
         self._gen_w, self._gen_h = w, h
+        self._gen_fore, self._gen_back = fore, back
+        self._gen_spec_cur = (w, h, fore, back)   # 每行记下出图参数，便于导出前比对
         self._gen_tasks = lines
         self._gen_index = 0
         self._gen_used = set()   # 导出时才按目标目录已有文件避开同名
@@ -1993,7 +2366,8 @@ class BatchWindow:
             text = self._gen_tasks[i]
             name, png, tag = "", b"", "err"
             try:
-                img = make_qr_image(text, self._gen_w, self._gen_h)
+                img = make_qr_image(text, self._gen_w, self._gen_h,
+                                    self._gen_fore, self._gen_back)
                 buf = io.BytesIO()
                 img.save(buf, "PNG")
                 png = buf.getvalue()
@@ -2003,7 +2377,8 @@ class BatchWindow:
                 status, name = f"失败：{e}", ""
             self.gen_rows.append({"idx": i + 1, "content": text,
                                   "status": status, "name": name,
-                                  "file": "", "png": png, "tag": tag})
+                                  "file": "", "png": png, "tag": tag,
+                                  "spec": self._gen_spec_cur})
             self.gen_tree.insert("", "end",
                                  values=(i + 1, text, status, name),
                                  tags=(tag,))
@@ -2201,8 +2576,19 @@ class BatchWindow:
             return
         row = self.gen_rows[i]
         # 图片保存在内存里，导出前也能直接双击复制，不依赖磁盘文件
+        if row.get("tag") != "ok":
+            self._status("gen", f"第 {i + 1} 行没有生成图片")
+            return
+        # 颜色 / 尺寸改过之后，复制也要用当前设置的那张，而不是旧图
+        spec = self._gen_spec()
+        if spec and row.get("spec") != spec:
+            try:
+                self._render_row_png(row, spec)
+            except Exception as e:
+                self._status("gen", f"第 {i + 1} 行按当前设置重画失败：{e}")
+                return
         png = row.get("png", b"")
-        if row.get("tag") != "ok" or not png:
+        if not png:
             self._status("gen", f"第 {i + 1} 行没有生成图片")
             return
         try:
